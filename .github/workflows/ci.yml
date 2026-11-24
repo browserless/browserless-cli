@@ -246,6 +246,8 @@ jobs:
         run: bash scripts/ci/verify-package-tarball.sh
       - name: Check for internal references
         run: bash scripts/ci/check-internal-references.sh
+      - name: Test the public PR text check
+        run: node --test scripts/ci/check-public-pr-text.test.mjs
       # --omit=dev: devDeps never ship (files = build/), so a build-tool
       # advisory is not an end-user exposure and must not gate merges.
       - name: npm audit (high+ severity, production deps)

@@ -774,6 +774,8 @@ The body — when present — should explain _why_ the change was needed, especi
 
 PRs are squash-merged, so the PR title becomes the commit subject that release-please copies into `CHANGELOG.md`, the GitHub release and the npm package. Keep titles in Conventional Commits form (`pr-title.yml` checks it) and describe the change for users of the CLI.
 
+PR titles, descriptions and commit messages must not contain internal issue-tracker IDs or links to internal tools. `public-pr-rules.yml` runs `scripts/ci/check-public-pr-text.mjs` on all three; Dependabot PRs are checked on the title only.
+
 `.github/pull_request_template.md` asks for a summary, related issues and a test plan.
 
 ### Pre-PR Sanity
