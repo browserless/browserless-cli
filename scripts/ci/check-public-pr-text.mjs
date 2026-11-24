@@ -31,11 +31,13 @@ const TICKET_ID = /\b([A-Z]{2,})-\d+/g;
 // trailer is allowed.
 const INTERNAL_HOST =
   /linear\.app\b|ampcode\.com\/threads|slack\.com|devin\.ai|usepylon\.com/gi;
-// A review bot can add a badge to every PR description. Only the badge's exact
-// review link and image URLs are exempt: anything else on that host still
-// fails, and nothing may follow them (no query string or extra path).
+// A review bot can add an HTML badge to every PR description. Only the badge's
+// exact review link and image URLs are exempt, and only when the quote closing
+// their attribute follows at once: any suffix (a query string, more path, or a
+// backslash, space or tab that URL parsing turns into a path separator or
+// drops) could point elsewhere on that host, so it still fails.
 const PUBLIC_BOT_LINK =
-  /https:\/\/app\.devin\.ai\/review\/browserless\/browserless-cli\/pull\/\d+(?![\w/.?#&=%-])|https:\/\/static\.devin\.ai\/assets\/gh-devin-review-(?:dark|light)\.svg(?:\?v=\d+)?(?![\w/.?#&=%-])/g;
+  /https:\/\/app\.devin\.ai\/review\/browserless\/browserless-cli\/pull\/\d+(?=")|https:\/\/static\.devin\.ai\/assets\/gh-devin-review-(?:dark|light)\.svg(?:\?v=\d+)?(?=")/g;
 // Dependabot writes descriptions from upstream release notes, which can
 // legitimately mention other projects' tracker IDs.
 const TITLE_ONLY_AUTHORS = new Set(['dependabot[bot]']);

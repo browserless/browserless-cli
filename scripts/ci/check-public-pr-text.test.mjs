@@ -113,6 +113,15 @@ for (const body of [
   'https://app.devin.ai/review/browserless/browserless-cli/pull/3/../../sessions/abc',
   `https://app.devin.ai/review/${id('ABC', 1303)}`,
   `https://static.devin.ai/assets/${id('ABC', 1303)}.svg`,
+  // URL parsing turns a backslash into a path separator and drops tabs, and a
+  // Markdown link in angle brackets may contain a space, so each of these
+  // resolves to a page outside the review path.
+  'https://app.devin.ai/review/browserless/browserless-cli/pull/3\\..\\..\\..\\..\\..\\sessions\\abc',
+  '[review](<https://app.devin.ai/review/browserless/browserless-cli/pull/3 /../../../../../sessions/abc>)',
+  'href="https://app.devin.ai/review/browserless/browserless-cli/pull/3\t/../../../../../sessions/abc"',
+  'https://static.devin.ai/assets/gh-devin-review-dark.svg\\..\\..\\other.svg',
+  // Outside a quoted HTML attribute, even the exact badge URL is not exempt.
+  'https://app.devin.ai/review/browserless/browserless-cli/pull/3',
 ]) {
   test(`the badge exemption cannot hide other text: ${body}`, () => {
     assert.equal(run({ PR_TITLE: 'docs: fix typo', PR_BODY: body }).code, 1);
