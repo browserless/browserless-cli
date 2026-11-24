@@ -1,0 +1,13 @@
+src/
+tsconfig.json
+.github/
+.idea/
+*.log
+.DS_Store
+.nvmrc
+
+# Contributor / agent guides. Already excluded by package.json:files[] (an
+# allowlist) and guarded by scripts/ci/verify-package-tarball.sh — listed here as
+# defense in depth.
+AGENTS.md
+CLAUDE.md

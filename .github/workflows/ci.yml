@@ -1,0 +1,316 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '23 7 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.run_attempt == '1' && github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == '1' }}
+
+# Default least-privilege: read-only repo access. Individual jobs scope
+# up explicitly when they need to write (none today).
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Keep the required check names on Node 26 from .nvmrc.
+    name: ${{ matrix.label }}${{ matrix.node && format(' / Node {0}', matrix.node) || '' }} / Unit & Smoke
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ['', '24']
+        exclude: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"macos-latest","node":"24"},{"os":"windows-latest","node":"24"}]' || '[]') }}
+        include:
+          - { os: ubuntu-latest, label: Linux }
+          - { os: macos-latest, label: macOS }
+          - { os: windows-latest, label: Windows }
+    runs-on: ${{ matrix.os }}
+    # Dogfooding the CLI in CI must never emit usage analytics to the
+    # production Amplitude project — disable telemetry for every step.
+    env:
+      BROWSERLESS_TELEMETRY_DISABLED: '1'
+    steps:
+      # ──── Setup ────────────────────────────────────────────────────────
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node ${{ matrix.node || '26' }}
+        uses: actions/setup-node@v7.1.0
+        with:
+          # An explicit compatibility version takes precedence over the file.
+          node-version: ${{ matrix.node }}
+          node-version-file: .nvmrc
+          cache: npm
+          check-latest: true
+      - name: Ensure npm >= 11.10.0 (min-release-age support)
+        # Use the bundled npm (check-latest keeps it current); never install another CLI.
+        shell: bash
+        run: |
+          node -e 'const [major, minor] = process.argv[1].split(".").map(Number); if (!(major > 11 || (major === 11 && minor >= 10))) process.exit(1)' "$(npm --version)"
+
+      - run: npm ci
+        name: Install dependencies
+
+      # ──── Static checks + unit ─────────────────────────────────────────
+      - run: npm run lint
+        name: Lint
+
+      - run: npm run build
+        name: Build
+
+      # Windows occasionally hard-crashes the mocha process with no
+      # output (Node fastfail on a native module / port race) on the
+      # first attempt — retrying once recovers reliably. Linux + macOS
+      # have never shown this signature, so we keep them at a single
+      # attempt so genuine failures fail fast.
+      - name: Test — unit
+        uses: nick-fields/retry@v4.0.0
+        with:
+          timeout_minutes: 5
+          max_attempts: ${{ runner.os == 'Windows' && 2 || 1 }}
+          retry_wait_seconds: 5
+          command: npm test
+        env:
+          CI: 'true'
+
+      # ──── Install the CLI globally from a packed tarball ───────────────
+      # Tests the actual published-install path; subsequent smoke steps
+      # invoke `browserless` from PATH.
+      - run: bash scripts/ci/install-cli-from-tarball.sh
+        name: Install CLI from tarball
+
+      # ──── Smoke 1: every CLI command against a stub server ─────────────
+      - run: npm run test:cli
+        name: Smoke — CLI command tree (stub server)
+        env:
+          CI: 'true'
+
+      # ──── Per-OS prerequisites for browser-driving smokes ──────────────
+      # Every apt/snap/choco install step gets `timeout-minutes: 5` as a
+      # safety net — a stuck debconf prompt or a slow mirror has cost us
+      # a 1-hour CI run before. The scripts also set DEBIAN_FRONTEND and
+      # apt timeouts; the step cap is belt-and-braces.
+      - if: runner.os == 'Linux'
+        name: Set up — Chrome (Linux)
+        timeout-minutes: 5
+        run: bash scripts/ci/install-chrome-linux.sh
+
+      # Defender real-time scanning of the copied user-data-dir + chrome.exe
+      # intermittently pushes a single per-origin capture past its 15 s
+      # deadline (the cli-capture-smoke "timed out after 15000ms" flake).
+      # Exclude the temp tree + chrome.exe once here; the exclusion persists
+      # for the capture / launch / discovery smokes below. Best-effort —
+      # Add-MpPreference can no-op on a managed runner image, so the script
+      # never fails the job; a recurring capture flake is the signal it
+      # didn't take.
+      - if: runner.os == 'Windows'
+        name: Set up — Defender exclusions (Windows)
+        timeout-minutes: 5
+        shell: pwsh
+        run: ./scripts/ci/exclude-defender-windows.ps1
+
+      # ──── Smoke 2: capture pipeline against real Chrome ────────────────
+      - run: npm run test:capture
+        name: Smoke — capture (real Chrome)
+        env:
+          CI: 'true'
+
+      # ──── Smoke 2b: copy-profile filter audit ──────────────────────────
+      # Boots a fresh Chrome briefly, runs the temp-dir copy through the
+      # filter, fails if any post-filter entry matches a sensitive-name
+      # pattern. Future Chrome adds NewSensitiveDB → this smoke fails →
+      # someone updates SKIP_SENSITIVE_ENTRIES.
+      - run: npm run test:copy-filter
+        name: Smoke — copy-profile filter audit
+        env:
+          CI: 'true'
+
+      # ──── Smoke 3: profile launch + lock-refusal + concurrent ──────────
+      - run: npm run test:launch
+        name: Smoke — profile launch lifecycle
+        env:
+          CI: 'true'
+
+      # ──── Per-OS prerequisites for keychain smoke ──────────────────────
+      - if: runner.os == 'Linux'
+        name: Set up — gnome-keyring (Linux)
+        timeout-minutes: 5
+        run: bash scripts/ci/install-gnome-keyring-linux.sh
+
+      - if: runner.os == 'macOS'
+        name: Set up — throwaway Keychain (macOS)
+        run: bash scripts/ci/setup-keychain-macos.sh
+
+      # ──── Smoke 4: real OS credential store roundtrip ──────────────────
+      # Linux wraps the run inside a D-Bus session; macOS + Windows
+      # invoke the same script directly. The smoke script itself
+      # self-skips on macOS when CI=true if the keychain isn't ready.
+      - if: runner.os == 'Linux'
+        name: Smoke — keychain (Linux, D-Bus + gnome-keyring)
+        run: bash scripts/ci/run-keychain-smoke-linux.sh
+        env:
+          CI: 'true'
+
+      - if: runner.os == 'macOS' || runner.os == 'Windows'
+        name: Smoke — keychain (macOS / Windows)
+        run: npm run test:keychain
+        env:
+          CI: 'true'
+
+      # ──── Per-OS prerequisites for discovery smoke ─────────────────────
+      # Linux installs three browsers: Brave + Edge get full inspect-mode
+      # tests; Snap Chromium gets a lookup-only test because Snap
+      # confinement currently blocks our capture pipeline's tmp
+      # user-data-dir copy (real CLI limitation, documented in the
+      # discovery-smoke target comment).
+      - if: runner.os == 'Linux'
+        name: Set up — Brave + Edge (Linux)
+        timeout-minutes: 5
+        run: bash scripts/ci/install-brave-edge-linux.sh
+
+      - if: runner.os == 'Linux'
+        name: Set up — Chromium via Snap (Linux)
+        timeout-minutes: 5
+        run: bash scripts/ci/install-chromium-snap-linux.sh
+
+      - if: runner.os == 'Windows'
+        name: Set up — Brave (Windows)
+        timeout-minutes: 10
+        shell: pwsh
+        run: ./scripts/ci/install-brave-windows.ps1
+
+      # ──── Smoke 5: built-in registry discovery ─────────────────────────
+      # Linux: Brave + Edge (full) + Snap Chromium (lookup-only).
+      # Windows: Brave.
+      # macOS: self-skips inside the script (Chrome-variant headless mode
+      # is unreliable on hosted runners — see cli-capture-smoke for root
+      # cause).
+      - run: npm run test:discovery
+        name: Smoke — built-in registry
+        env:
+          CI: 'true'
+
+  package-hygiene:
+    name: Package hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          check-latest: true
+      - name: Ensure npm >= 11.10.0 (min-release-age support)
+        # Use the bundled npm (check-latest keeps it current); never install another CLI.
+        shell: bash
+        run: |
+          node -e 'const [major, minor] = process.argv[1].split(".").map(Number); if (!(major > 11 || (major === 11 && minor >= 10))) process.exit(1)' "$(npm --version)"
+      - run: npm ci
+        name: Install dependencies
+      # zizmor 1.32.0 stops after its first compliant updater; check every entry.
+      - name: Enforce Dependabot cooldown policy
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          import { load } from 'js-yaml';
+          const { updates } = load(readFileSync('.github/dependabot.yml', 'utf8'));
+          for (const ecosystem of ['npm', 'github-actions']) {
+            assert(updates.some(update => update['package-ecosystem'] === ecosystem),
+              `Missing ${ecosystem} updater`);
+          }
+          for (const update of updates) {
+            assert(update.cooldown?.['default-days'] >= 3,
+              `${update['package-ecosystem']} requires a cooldown of at least three days`);
+            for (const key of ['semver-major-days', 'semver-minor-days', 'semver-patch-days']) {
+              assert(!(key in update.cooldown) || update.cooldown[key] >= 3,
+                `${update['package-ecosystem']} ${key} must be at least three days`);
+            }
+            assert(!('include' in update.cooldown) && !('exclude' in update.cooldown),
+              `${update['package-ecosystem']} cooldown must cover all dependencies`);
+          }
+          NODE
+      - name: Verify published tarball contents
+        run: bash scripts/ci/verify-package-tarball.sh
+      - name: Check for internal references
+        run: bash scripts/ci/check-internal-references.sh
+      # --omit=dev: devDeps never ship (files = build/), so a build-tool
+      # advisory is not an end-user exposure and must not gate merges.
+      - name: npm audit (high+ severity, production deps)
+        run: npm audit --omit=dev --audit-level=high
+
+  lockfile:
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install and verify workflow lockfile
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh extension install github/gh-actions-lock --pin v0.4.1
+          gh actions-lock --verify
+
+  zizmor:
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install zizmor 1.32.0
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            --proto '=https' --tlsv1.2 \
+            https://github.com/zizmorcore/zizmor/releases/download/v1.32.0/zizmor-x86_64-unknown-linux-gnu.tar.gz \
+            -o zizmor.tar.gz
+          echo 'bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b  zizmor.tar.gz' | sha256sum --check
+          mkdir -p workflow-tools
+          tar -xzf zizmor.tar.gz -C workflow-tools zizmor
+          echo "$RUNNER_TEMP/workflow-tools" >> "$GITHUB_PATH"
+      - name: Audit workflows from the repository root
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: zizmor .
+
+  actionlint:
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install actionlint 1.7.12 and ShellCheck 0.11.0
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            --proto '=https' --tlsv1.2 \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            -o actionlint.tar.gz
+          echo '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz' | sha256sum --check
+          curl --fail --silent --show-error --location --retry 3 \
+            --proto '=https' --tlsv1.2 \
+            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz \
+            -o shellcheck.tar.xz
+          echo '8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  shellcheck.tar.xz' | sha256sum --check
+          mkdir -p workflow-tools
+          tar -xzf actionlint.tar.gz -C workflow-tools actionlint
+          tar -xJf shellcheck.tar.xz --strip-components=1 -C workflow-tools shellcheck-v0.11.0/shellcheck
+          echo "$RUNNER_TEMP/workflow-tools" >> "$GITHUB_PATH"
+      - name: Check workflow expressions and shell scripts
+        run: actionlint

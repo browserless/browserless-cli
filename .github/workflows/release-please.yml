@@ -1,0 +1,63 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+# Prevent concurrent release-please runs from racing: a burst of pushes to main
+# would otherwise run in parallel, and the last force-push to the release branch
+# wins — which can be a run that read a stale tree, reverting whatever the newer
+# run already wrote to the release PR (e.g. dependency bumps). cancel-in-progress
+# cancels older in-flight runs, keeping only the newest (latest main) run.
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: true
+
+# Both jobs act through the app token below, never GITHUB_TOKEN.
+permissions: {}
+
+jobs:
+  release-please:
+    if: github.repository == 'browserless/browserless-cli'
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      pr_number: ${{ steps.release.outputs.pr && fromJSON(steps.release.outputs.pr).number }}
+    steps:
+      # App token (not GITHUB_TOKEN) so the tag/Release it creates can trigger
+      # publish.yml.
+      - uses: actions/create-github-app-token@v3.3.0
+        id: app-token
+        with:
+          client-id: ${{ vars.BROWSERLESS_ACTIONS_CLIENT_ID }}
+          private-key: ${{ secrets.BROWSERLESS_ACTIONS_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: googleapis/release-please-action@v5.0.0
+        id: release
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  enable-auto-merge:
+    needs: release-please
+    if: github.repository == 'browserless/browserless-cli' && needs.release-please.outputs.pr_number
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - uses: actions/create-github-app-token@v3.3.0
+        id: app-token
+        with:
+          client-id: ${{ vars.BROWSERLESS_ACTIONS_CLIENT_ID }}
+          private-key: ${{ secrets.BROWSERLESS_ACTIONS_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Enable auto-merge on Release PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ needs.release-please.outputs.pr_number }}
+        run: gh pr merge "$PR_NUMBER" --auto --squash --repo "$GITHUB_REPOSITORY"

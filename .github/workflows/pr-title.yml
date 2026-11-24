@@ -1,0 +1,54 @@
+name: PR Title
+
+# PRs are squash-merged, so the PR title becomes the commit subject that
+# release-please parses for the version bump and copies verbatim into
+# CHANGELOG.md, the GitHub release and the npm package.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - name: Validate Conventional Commit title
+        uses: amannn/action-semantic-pull-request@v6.1.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Keep in sync with release-please-config.json's changelog-sections.
+          types: |
+            feat
+            fix
+            perf
+            revert
+            build
+            chore
+            ci
+            docs
+            style
+            refactor
+            test
+
+      # The title is published in the changelog, so it must not carry
+      # issue-tracker IDs or merge-hold markers. Enforced once the repository
+      # is public.
+      - name: Reject tracker IDs and merge-hold markers
+        if: ${{ !github.event.repository.private }}
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        # Same per-match allowlist as scripts/ci/check-internal-references.sh,
+        # so public schemes such as SHA-256 or UTF-8 stay allowed. No word
+        # boundaries, so an ID followed by an underscore still matches.
+        run: |
+          ids=$(printf '%s\n' "$TITLE" | grep -oE '[A-Z]{2,}-[0-9]+' |
+            grep -vE '^(CVE|GHSA|RFC|ISO|UTF|SHA|ECMA|ES)-[0-9]+$' || true)
+          if [ -n "$ids" ] || printf '%s' "$TITLE" | grep -q 'DO NOT MERGE'; then
+            echo "::error::Remove issue-tracker IDs and \"DO NOT MERGE\" from the PR title; it becomes a public changelog entry."
+            exit 1
+          fi

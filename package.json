@@ -1,0 +1,101 @@
+{
+  "name": "@browserless.io/cli",
+  "version": "0.7.0",
+  "description": "Browserless CLI — manage authentication profiles, sessions, and other Browserless features from your terminal.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "browserless": "./build/cli.js"
+  },
+  "files": [
+    "build",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:publish": "node scripts/build-publish.mjs",
+    "dev": "npm run build && npm link",
+    "watch": "tsc -p tsconfig.json --watch",
+    "start": "node build/cli.js",
+    "lint": "eslint \"src/**/*.ts\" \"scripts/**/*.{js,mjs}\"",
+    "prettier": "prettier '{src,scripts,.github}/**/*.{js,ts,json,yml,yaml,md}' --log-level error --write",
+    "test": "npm run build && mocha --exit",
+    "test:grep": "npm run build && mocha --exit --grep",
+    "test:cli": "node scripts/cli-smoke.mjs",
+    "test:capture": "node scripts/cli-capture-smoke.mjs",
+    "test:launch": "node scripts/cli-launch-smoke.mjs",
+    "test:keychain": "node scripts/cli-keychain-smoke.mjs",
+    "test:discovery": "node scripts/cli-discovery-smoke.mjs",
+    "test:copy-filter": "npm run build && node scripts/cli-copy-filter-smoke.mjs",
+    "fixture:build": "npm run build && node scripts/build-fixture-profile.js",
+    "verify:platform": "bash scripts/verify-cross-platform.sh",
+    "clean": "node scripts/clean.mjs",
+    "prepack": "npm run build:publish && node scripts/minify-build.mjs && node scripts/strip-test-artifacts.mjs",
+    "prepare": "husky"
+  },
+  "engines": {
+    "node": ">=24",
+    "npm": ">=11.10.0"
+  },
+  "mocha": {
+    "spec": "build/**/*.spec.js",
+    "timeout": 30000,
+    "reporter": "spec"
+  },
+  "dependencies": {
+    "commander": "^15.1.0",
+    "string-width": "^9.0.0",
+    "ws": "^8.23.0"
+  },
+  "optionalDependencies": {
+    "@napi-rs/keyring": "^2.1.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/chai": "^5.2.3",
+    "@types/chrome-remote-interface": "^0.34.1",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^26.6.6",
+    "@types/sinon": "^22.0.2",
+    "@types/ws": "^8.18.2",
+    "chai": "^6.3.0",
+    "chrome-remote-interface": "^0.34.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.15.0",
+    "globals": "^17.14.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.6.1",
+    "mocha": "^12.0.3",
+    "prettier": "3.10.1",
+    "sinon": "^22.1.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.73.0"
+  },
+  "overrides": {
+    "mocha": {
+      "diff": "^9.0.0",
+      "serialize-javascript": "^7.0.5",
+      "glob": "^13.0.0"
+    }
+  },
+  "lint-staged": {
+    "**/*": "prettier --write --ignore-unknown"
+  },
+  "prettier": {
+    "semi": true,
+    "trailingComma": "all",
+    "singleQuote": true,
+    "printWidth": 80
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/browserless/browserless-cli.git"
+  },
+  "homepage": "https://github.com/browserless/browserless-cli#readme",
+  "bugs": {
+    "url": "https://github.com/browserless/browserless-cli/issues"
+  },
+  "author": "browserless.io"
+}

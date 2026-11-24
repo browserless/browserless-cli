@@ -1,0 +1,109 @@
+name: Smoke Windows
+
+# Manual-dispatch smoke test on a real Windows runner. Runs the full CLI
+# install + critical-path flows that unit tests can't cover:
+#   - npm bin shim generates a .cmd wrapper correctly
+#   - Real Chrome detection at %LOCALAPPDATA%\Google\Chrome\User Data
+#   - Path-with-spaces handling in spawn() args
+#   - SingletonLock detection (regular file, not symlink) on Windows
+#   - taskkill /T /F process-tree termination
+#   - @napi-rs/keyring's Windows Credential Manager binding
+#
+# Trigger: Actions → Smoke Windows → Run workflow.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    # Dogfooding the CLI must never emit usage analytics to production.
+    env:
+      BROWSERLESS_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 26
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          check-latest: true
+      - name: Ensure npm >= 11.10.0 (min-release-age support)
+        # Use the bundled npm (check-latest keeps it current); never install another CLI.
+        shell: bash
+        run: |
+          node -e 'const [major, minor] = process.argv[1].split(".").map(Number); if (!(major > 11 || (major === 11 && minor >= 10))) process.exit(1)' "$(npm --version)"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Link CLI globally
+        run: npm link
+
+      - name: Verify CLI binary resolves on PATH
+        shell: pwsh
+        run: |
+          $resolved = Get-Command browserless -ErrorAction Stop
+          Write-Host "browserless resolved to: $($resolved.Source)"
+          browserless --version
+          browserless --help | Out-Host
+
+      - name: Help tree across all namespaces
+        shell: pwsh
+        run: |
+          browserless profile --help | Out-Host
+          browserless auth --help | Out-Host
+          browserless config --help | Out-Host
+          browserless profile sources --help | Out-Host
+          browserless profile exclude --help | Out-Host
+
+      - name: Local-only commands (config + exclude round-trips)
+        shell: pwsh
+        run: ./scripts/smoke/local-commands.ps1
+
+      - name: Verify pre-installed Chrome (windows-latest ships it)
+        shell: pwsh
+        run: ./scripts/smoke/verify-chrome.ps1
+
+      - name: Seed Chrome user-data-dir for discovery
+        # Skip launching Chrome to "initialize" — on Windows runners Chrome's
+        # first-run can be slow enough that our timed kill races the
+        # directory write. Write the bare minimum directly so discovery
+        # passes. The real `profile launch` step below still exercises
+        # end-to-end Chrome boot.
+        shell: pwsh
+        run: |
+          $userDataDir = "$env:LOCALAPPDATA\Google\Chrome\User Data"
+          New-Item -ItemType Directory -Path "$userDataDir\Default" -Force | Out-Null
+          '{}' | Out-File -FilePath "$userDataDir\Default\Preferences" -Encoding utf8 -NoNewline
+          '{"profile":{"info_cache":{"Default":{"name":"Test"}}}}' | Out-File -FilePath "$userDataDir\Local State" -Encoding utf8 -NoNewline
+          Write-Host "✓ Seeded $userDataDir\Default"
+
+      - name: Discovery — text + JSON, must include chrome
+        shell: pwsh
+        run: ./scripts/smoke/discovery.ps1
+
+      - name: Smoke profile launch (headless, JSON-mode, verify CDP came up)
+        shell: pwsh
+        timeout-minutes: 3
+        run: ./scripts/smoke/profile-launch.ps1
+
+      - name: Smoke profile launch — lock detection (Chrome already running)
+        shell: pwsh
+        timeout-minutes: 2
+        run: ./scripts/smoke/lock-detection.ps1
+
+      - name: Run unit tests on Windows
+        run: npm test
+        env:
+          CI: 'true'

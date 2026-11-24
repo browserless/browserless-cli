@@ -1,0 +1,124 @@
+name: Smoke Linux
+
+# Manual-dispatch smoke test on a real Linux runner. Covers Linux-only
+# integration paths that unit tests can't:
+#   - whichOnPath fallback for Snap / Flatpak / non-/usr/bin Chrome installs
+#   - libsecret / @napi-rs/keyring binding behavior (or graceful fallback when absent)
+#   - --password-store=basic launch arg passthrough
+#   - SingletonLock as a symlink (vs. regular file on Windows)
+#   - SIGTERM → SIGKILL grace path
+#   - File mode 0o600 enforcement on the config dir
+#
+# Trigger: Actions → Smoke Linux → Run workflow.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Dogfooding the CLI must never emit usage analytics to production.
+    env:
+      BROWSERLESS_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 26
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          check-latest: true
+      - name: Ensure npm >= 11.10.0 (min-release-age support)
+        # Use the bundled npm (check-latest keeps it current); never install another CLI.
+        shell: bash
+        run: |
+          node -e 'const [major, minor] = process.argv[1].split(".").map(Number); if (!(major > 11 || (major === 11 && minor >= 10))) process.exit(1)' "$(npm --version)"
+
+      - name: Install libsecret (so the keyring binding can talk to libsecret)
+        # Without this, @napi-rs/keyring's Linux backend can't reach the
+        # secret service over D-Bus and we end up exercising the file-
+        # fallback path. With it, we test the keyring path. Most desktop
+        # Linux users have libsecret; headless servers usually don't.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libsecret-1-dev gnome-keyring dbus-x11
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Link CLI globally
+        run: sudo npm link
+
+      - name: Verify CLI binary resolves on PATH
+        run: |
+          which browserless
+          browserless --version
+          browserless --help
+
+      - name: Help tree across all namespaces
+        run: |
+          browserless profile --help
+          browserless auth --help
+          browserless config --help
+          browserless profile sources --help
+          browserless profile exclude --help
+
+      - name: Local-only commands (config + exclude round-trips)
+        run: bash scripts/smoke/local-commands.sh
+
+      - name: Verify config file mode is 0600
+        run: |
+          mode=$(stat -c "%a" "$HOME/.browserless/config.json")
+          [ "$mode" = "600" ] || { echo "config.json mode is $mode, expected 600"; exit 1; }
+          echo "✓ config.json mode is 600"
+
+      - name: Verify Chrome installed
+        run: bash scripts/smoke/verify-chrome.sh
+        env:
+          RUNNER_OS: Linux
+
+      - name: Seed Chrome user-data-dir for discovery
+        # Skip launching Chrome to "initialize" — on CI runners Chrome's
+        # first-run dbus / display chatter can take >10s and our kill
+        # races the directory write. Write the bare minimum directly so
+        # discovery passes. The real `profile launch` step below still
+        # exercises end-to-end Chrome boot.
+        run: |
+          set -e
+          dir="$HOME/.config/google-chrome"
+          mkdir -p "$dir/Default"
+          echo '{}' > "$dir/Default/Preferences"
+          echo '{"profile":{"info_cache":{"Default":{"name":"Test"}}}}' > "$dir/Local State"
+          echo "✓ Seeded $dir/Default"
+
+      - name: Discovery — text + JSON, must include chrome
+        run: bash scripts/smoke/discovery.sh
+        env:
+          RUNNER_OS: Linux
+
+      - name: Smoke profile launch (--headless --json, verify CDP endpoint)
+        timeout-minutes: 3
+        run: bash scripts/smoke/profile-launch.sh
+        env:
+          RUNNER_OS: Linux
+
+      - name: Smoke profile launch — lock detection (Chrome already running)
+        timeout-minutes: 2
+        run: bash scripts/smoke/lock-detection.sh
+        env:
+          RUNNER_OS: Linux
+
+      - name: Run unit tests on Linux
+        run: npm test
+        env:
+          CI: 'true'
