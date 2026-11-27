@@ -56,14 +56,9 @@ const action = (opts: Options): Promise<void> =>
       state: result.state,
       serialized: result.serialized,
       captureSettings: buildCaptureSettings(
-        {
-          ...flags,
-          browser: flags.browser ?? result.source.browser,
-          profile:
-            flags.browser === undefined
-              ? result.source.profile
-              : (flags.profile ?? result.source.profile),
-        },
+        flags.browser !== undefined && flags.profile !== undefined
+          ? flags
+          : { ...flags, ...result.source },
         result.diagnostics,
         'refresh',
       ),

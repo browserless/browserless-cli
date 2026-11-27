@@ -76,6 +76,11 @@ describe('commands/profile/upload telemetry', () => {
           sourceArgs: ['--profile', 'Work'],
           expectedSource: { browser: 'picker-b', profile: 'Profile 2' },
         },
+        {
+          json: true,
+          sourceArgs: ['--browser', 'PICKER-B'],
+          expectedSource: { browser: 'picker-b', profile: 'Profile 2' },
+        },
       ]) {
         stdout.length = 0;
         const program = new Command();
