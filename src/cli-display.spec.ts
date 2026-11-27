@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,59 @@ describe('CLI terminal-safe display', () => {
   afterEach(async () => {
     await stub.close();
     await home.cleanup();
+  });
+
+  it('lists safe explicit source flags when inspect cannot prompt', async () => {
+    const userDataDir = path.join(home.path, 'browser-data');
+    await fs.mkdir(path.join(userDataDir, 'Default'), { recursive: true });
+    await fs.writeFile(path.join(userDataDir, 'Default', 'Preferences'), '{}');
+    await fs.writeFile(
+      path.join(userDataDir, 'Local State'),
+      JSON.stringify({
+        profile: { info_cache: { Default: { name: 'Evil\x1b[31mName' } } },
+      }),
+    );
+    await home.writeRawConfig(
+      'custom-browsers.json',
+      JSON.stringify([
+        { name: 'hostile-browser', binaryPath: process.execPath, userDataDir },
+        { name: 'Browser Team', binaryPath: process.execPath, userDataDir },
+        { name: 'browser; invalid', binaryPath: process.execPath, userDataDir },
+      ]),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        fileURLToPath(new URL('./cli.js', import.meta.url)),
+        'profile',
+        'inspect',
+      ],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 3000,
+        env: {
+          ...process.env,
+          HOME: home.path,
+          USERPROFILE: home.path,
+          BROWSERLESS_TELEMETRY_DISABLED: '1',
+        },
+      },
+    );
+    expect(result.status, result.stderr).to.equal(2);
+    expect(result.stderr).to.include(
+      '--browser and --profile are required when the CLI cannot ask',
+    );
+    expect(result.stderr).to.include(
+      '--browser hostile-browser --profile "Default"',
+    );
+    expect(result.stderr).to.include(
+      '--browser "Browser Team" --profile "Default"',
+    );
+    expect(result.stderr).not.to.include('--browser browser;');
+    expect(result.stderr).to.include('Evil\\u001b[31mName');
+    expect(result.stderr).not.to.include('\x1b');
+    expect(result.stderr).not.to.include(userDataDir);
   });
 
   const run = (args: string[]) =>

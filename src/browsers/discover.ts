@@ -273,6 +273,54 @@ const matchesProfile = (input: string, profile: DetectedProfile): boolean => {
   );
 };
 
+export const findSourceCandidates = (
+  browserInput: string | undefined,
+  profileInput: string | undefined,
+  registeredBrowserKeys: { key: string; displayName: string }[],
+  detected: DetectedProfile[],
+): DetectedProfile[] => {
+  let sameBrowser = detected;
+  if (browserInput !== undefined) {
+    const lowered = browserInput.trim().toLowerCase();
+    const known = registeredBrowserKeys.some(
+      (b) =>
+        b.key.toLowerCase() === lowered ||
+        b.displayName.toLowerCase() === lowered,
+    );
+    if (!known) {
+      throw new UsageError(
+        `Unknown browser "${terminalSafe(browserInput)}". Run \`browserless profile sources list\` to see detected browsers, or register a custom one with \`profile sources add\`.`,
+        'unknown-browser',
+      );
+    }
+    sameBrowser = detected.filter((p) => matchesBrowser(browserInput, p));
+    if (sameBrowser.length === 0) {
+      throw new UsageError(
+        `Browser "${terminalSafe(browserInput)}" is registered but has no detected profiles on this machine.`,
+        'browser-has-no-profiles',
+      );
+    }
+  }
+
+  if (profileInput === undefined) return sameBrowser;
+  const matches = sameBrowser.filter((p) => matchesProfile(profileInput, p));
+  if (matches.length === 0) {
+    const candidates = sameBrowser
+      .map(
+        (p) =>
+          `  - ${browserInput === undefined ? `${terminalSafe(p.browserDisplayName)} / ` : ''}${terminalSafe(p.profileDisplayName)} (${terminalSafe(p.profileDirName)})`,
+      )
+      .join('\n');
+    const browser =
+      browserInput === undefined ? '' : ` under ${terminalSafe(browserInput)}`;
+    throw new UsageError(
+      `No profile named "${terminalSafe(profileInput)}"${browser}. Available profiles:\n${candidates}`,
+      'local-profile-not-found',
+    );
+  }
+  return matches;
+};
+
 /** Pure resolver: no I/O, no platform branches — directly unit-testable. */
 export const resolveProfileFromCandidates = (
   browserInput: string,
@@ -280,44 +328,13 @@ export const resolveProfileFromCandidates = (
   registeredBrowserKeys: { key: string; displayName: string }[],
   detected: DetectedProfile[],
 ): DetectedProfile => {
-  const lowered = browserInput.trim().toLowerCase();
-  const known = registeredBrowserKeys.some(
-    (b) =>
-      b.key.toLowerCase() === lowered ||
-      b.displayName.toLowerCase() === lowered,
+  const matches = findSourceCandidates(
+    browserInput,
+    profileInput,
+    registeredBrowserKeys,
+    detected,
   );
-  if (!known) {
-    throw new UsageError(
-      `Unknown browser "${terminalSafe(browserInput)}". Run \`browserless profile sources list\` to see detected browsers, or register a custom one with \`profile sources add\`.`,
-      'unknown-browser',
-    );
-  }
-
-  const matches = detected.filter(
-    (p) => matchesBrowser(browserInput, p) && matchesProfile(profileInput, p),
-  );
-
   if (matches.length === 1) return matches[0];
-
-  if (matches.length === 0) {
-    const sameBrowser = detected.filter((p) => matchesBrowser(browserInput, p));
-    if (sameBrowser.length === 0) {
-      throw new UsageError(
-        `Browser "${terminalSafe(browserInput)}" is registered but has no detected profiles on this machine.`,
-        'browser-has-no-profiles',
-      );
-    }
-    const candidates = sameBrowser
-      .map(
-        (p) =>
-          `  - ${terminalSafe(p.profileDisplayName)} (${terminalSafe(p.profileDirName)})`,
-      )
-      .join('\n');
-    throw new UsageError(
-      `No profile named "${terminalSafe(profileInput)}" under ${terminalSafe(browserInput)}. Available profiles:\n${candidates}`,
-      'local-profile-not-found',
-    );
-  }
 
   const candidates = matches
     .map(
@@ -331,6 +348,28 @@ export const resolveProfileFromCandidates = (
   );
 };
 
+const registeredBrowserKeys = async () => {
+  const customs = await readCustomBrowsers();
+  return [
+    ...BUILT_IN_BROWSERS.map((b) => ({
+      key: b.key,
+      displayName: b.displayName,
+    })),
+    ...customs.map((c) => ({ key: c.name, displayName: c.name })),
+  ];
+};
+
+export const loadSourceCandidates = async (
+  browserInput?: string,
+  profileInput?: string,
+): Promise<DetectedProfile[]> =>
+  findSourceCandidates(
+    browserInput,
+    profileInput,
+    await registeredBrowserKeys(),
+    await discoverProfiles(),
+  );
+
 /**
  * Resolve `--browser X --profile Y` to a single detected profile. Throws a
  * UsageError describing the candidates if zero or multiple match.
@@ -338,20 +377,10 @@ export const resolveProfileFromCandidates = (
 export const resolveProfile = async (
   browserInput: string,
   profileInput: string,
-): Promise<DetectedProfile> => {
-  const customs = await readCustomBrowsers();
-  const registeredKeys: { key: string; displayName: string }[] = [
-    ...BUILT_IN_BROWSERS.map((b) => ({
-      key: b.key,
-      displayName: b.displayName,
-    })),
-    ...customs.map((c) => ({ key: c.name, displayName: c.name })),
-  ];
-  const detected = await discoverProfiles();
-  return resolveProfileFromCandidates(
+): Promise<DetectedProfile> =>
+  resolveProfileFromCandidates(
     browserInput,
     profileInput,
-    registeredKeys,
-    detected,
+    await registeredBrowserKeys(),
+    await discoverProfiles(),
   );
-};

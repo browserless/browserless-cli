@@ -39,7 +39,11 @@ const action = (opts: Options): Promise<void> =>
     const flags = mergeStoredSettings(opts, existing.captureSettings);
     printEffectiveSettings(flags, existing.captureSettings, { userOptedOut });
 
-    const result = await runCapture({ flags, requiresDisclaimer: true });
+    const result = await runCapture({
+      flags,
+      requiresDisclaimer: true,
+      missingSource: 'stored-settings',
+    });
     setup.ready();
 
     process.stderr.write(
@@ -52,7 +56,11 @@ const action = (opts: Options): Promise<void> =>
       state: result.state,
       serialized: result.serialized,
       captureSettings: buildCaptureSettings(
-        flags,
+        {
+          ...flags,
+          browser: flags.browser ?? result.source.browser,
+          profile: flags.profile ?? result.source.profile,
+        },
         result.diagnostics,
         'refresh',
       ),

@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import {
   DetectedProfile,
+  findSourceCandidates,
   resolveProfileFromCandidates,
   whichOnPath,
 } from './discover.js';
@@ -54,6 +55,48 @@ describe('browsers/discover.resolveProfileFromCandidates', () => {
     userDataDir: `/fake/${browserKey}`,
     profilePath: `/fake/${browserKey}/${profileDirName}`,
     binaryPath: `/fake/bin/${browserKey}`,
+  });
+
+  describe('findSourceCandidates', () => {
+    const a = profile('chrome', 'Default', 'Personal');
+    const a1 = profile('chrome', 'Profile 1', 'Work');
+    const b = profile('brave', 'Default', 'Personal');
+    const b2 = profile('brave', 'Profile 2', 'Work');
+    const all = [a, a1, b, b2];
+
+    for (const [browser, name, detected, expected] of [
+      [undefined, undefined, [a, b], [a, b]],
+      [undefined, undefined, [], []],
+      ['chrome', undefined, all, [a, a1]],
+      ['CHROME', undefined, all, [a, a1]],
+      [undefined, 'Work', all, [a1, b2]],
+      ['brave', 'Default', all, [b]],
+    ] as const) {
+      it(`filters ${browser ?? 'any browser'} / ${name ?? 'any profile'} among ${detected.length} sources`, () => {
+        expect(
+          findSourceCandidates(browser, name, REGISTRY, [...detected]),
+        ).to.deep.equal(expected);
+      });
+    }
+
+    for (const [browser, name, detected, code] of [
+      ['nope', undefined, [a], 'unknown-browser'],
+      ['chrome', undefined, [b], 'browser-has-no-profiles'],
+      [undefined, 'Missing', [a, b], 'local-profile-not-found'],
+    ] as const) {
+      it(`reports ${code}`, () => {
+        const err = expect(() =>
+          findSourceCandidates(browser, name, REGISTRY, [...detected]),
+        ).to.throw(UsageError);
+        err.with.property('code', code);
+        if (code === 'local-profile-not-found') {
+          err.with
+            .property('message')
+            .that.includes('Google Chrome / Personal (Default)')
+            .and.includes('Brave / Personal (Default)');
+        }
+      });
+    }
   });
 
   it('escapes selectors and candidate fields without flattening guidance', () => {

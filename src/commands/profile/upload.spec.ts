@@ -1,7 +1,8 @@
 import { expect } from 'chai';
 import { Command } from 'commander';
 import sinon from 'sinon';
-import { CaptureError } from '../../errors.js';
+import { CaptureError, UsageError } from '../../errors.js';
+import { runCapture } from '../../cli-utils/capture-runner.js';
 import { setupTempHome, TempHome } from '../../test-helpers/temp-home.js';
 import * as telemetry from '../../telemetry/index.js';
 import { _resetRecordedTokenForTests } from '../../telemetry/token-cache.js';
@@ -62,34 +63,38 @@ describe('commands/profile/upload telemetry', () => {
       for (const json of [false, true]) {
         stdout.length = 0;
         const program = new Command();
+        let captureFlags;
         registerUpload(program, {
-          runCapture: async () => ({
-            state: { cookies: [], origins: [] },
-            serialized: '{"cookies":[],"origins":[]}',
-            capHit: false,
-            passwordStoreDefaulted: false,
-            diagnostics: {
-              cookieCountBeforeExclusion: 0,
-              cookieCountExcluded: 0,
-              originCountBeforeExclusion: 0,
-              originCountExcluded: 0,
-              originCountSkippedByOnlyDomain: 0,
-              excludedDomains: [],
-              onlyDomains: [],
-              durationMs: 0,
-              failedOrigins: [],
-            },
-          }),
+          runCapture: async ({ flags }) => {
+            captureFlags = flags;
+            return {
+              source: { browser: 'picker-b', profile: 'Profile 2' },
+              state: { cookies: [], origins: [] },
+              serialized: '{"cookies":[],"origins":[]}',
+              capHit: false,
+              passwordStoreDefaulted: false,
+              diagnostics: {
+                cookieCountBeforeExclusion: 0,
+                cookieCountExcluded: 0,
+                originCountBeforeExclusion: 0,
+                originCountExcluded: 0,
+                originCountSkippedByOnlyDomain: 0,
+                excludedDomains: [],
+                onlyDomains: [],
+                durationMs: 0,
+                failedOrigins: [],
+              },
+            };
+          },
         });
         await program.parseAsync(
           [
             'upload',
             '--name',
             'work',
-            '--browser',
-            'chrome',
-            '--profile',
-            'Default',
+            ...(json
+              ? ['--browser', 'Google Chrome', '--profile', 'Work']
+              : []),
             '--token',
             'test',
             '--server',
@@ -97,6 +102,21 @@ describe('commands/profile/upload telemetry', () => {
             ...(json ? ['--json'] : []),
           ],
           { from: 'user' },
+        );
+        expect(captureFlags).to.include(
+          json
+            ? { browser: 'Google Chrome', profile: 'Work' }
+            : { defaultExcludes: true },
+        );
+        if (!json) {
+          expect(captureFlags).not.to.have.any.keys('browser', 'profile');
+        }
+        expect(
+          JSON.parse(stub.recorded.at(-1)!.body).captureSettings,
+        ).to.include(
+          json
+            ? { browser: 'Google Chrome', profile: 'Work' }
+            : { browser: 'picker-b', profile: 'Profile 2' },
         );
         if (json) expect(JSON.parse(stdout.join(''))).to.deep.equal(profile);
         else {
@@ -109,68 +129,88 @@ describe('commands/profile/upload telemetry', () => {
     }
   });
 
-  it('posts Started and capture_failed when capture fails after token resolution', async () => {
-    const failure = new CaptureError('capture failed', 'browser-launch-failed');
-    const posted: Array<{ url: string; init?: RequestInit }> = [];
-    sandbox.stub(globalThis, 'fetch').callsFake(async (input, init) => {
-      posted.push({ url: input.toString(), init });
-      return new Response('', { status: 202 });
-    });
-
-    const program = new Command();
-    program.exitOverride();
-    registerUpload(program, {
-      runCapture: async () => {
-        throw failure;
-      },
-    });
-    program.hook('preAction', (_command, actionCommand) => {
-      telemetry.begin(actionCommand);
-    });
-
-    let caught: unknown;
-    try {
-      await program.parseAsync(
-        [
-          'upload',
-          '--name',
-          'work',
-          '--browser',
-          'chrome',
-          '--profile',
-          'Default',
-          '--token',
-          'tok-upload',
-        ],
-        { from: 'user' },
+  for (const reason of ['capture_failed', 'validation_rejected'] as const) {
+    it(`posts Started and ${reason} when capture fails after token resolution`, async () => {
+      const failure = new CaptureError(
+        'capture failed',
+        'browser-launch-failed',
       );
-    } catch (error) {
-      caught = error;
-      await telemetry.complete({
-        status: 'error',
-        exitCode: failure.exitCode,
-        errorName: failure.name,
-        errorCode: failure.code,
+      const posted: Array<{ url: string; init?: RequestInit }> = [];
+      sandbox.stub(globalThis, 'fetch').callsFake(async (input, init) => {
+        posted.push({ url: input.toString(), init });
+        return new Response('', { status: 202 });
       });
-    }
 
-    expect(caught).to.equal(failure);
-    expect(posted).to.have.length(1);
-    expect(posted[0].init?.headers).to.deep.include({
-      Authorization: 'Bearer tok-upload',
+      const program = new Command();
+      program.exitOverride();
+      registerUpload(program, {
+        runCapture:
+          reason === 'capture_failed'
+            ? async () => {
+                throw failure;
+              }
+            : (params) =>
+                runCapture({
+                  ...params,
+                  sourceSeams: {
+                    isInteractive: false,
+                    loadCandidates: async () => [],
+                  },
+                }),
+      });
+      program.hook('preAction', (_command, actionCommand) => {
+        telemetry.begin(actionCommand);
+      });
+
+      let caught: unknown;
+      try {
+        await program.parseAsync(
+          [
+            'upload',
+            '--name',
+            'work',
+            ...(reason === 'capture_failed'
+              ? ['--browser', 'chrome', '--profile', 'Default']
+              : []),
+            '--token',
+            'tok-upload',
+          ],
+          { from: 'user' },
+        );
+      } catch (error) {
+        if (!(error instanceof CaptureError || error instanceof UsageError))
+          throw error;
+        caught = error;
+        await telemetry.complete({
+          status: 'error',
+          exitCode: error.exitCode,
+          errorName: error.name,
+          errorCode: error.code,
+        });
+      }
+
+      if (reason === 'capture_failed') expect(caught).to.equal(failure);
+      else
+        expect(caught)
+          .to.be.instanceOf(UsageError)
+          .with.property('code', 'missing-required-flag');
+      expect(posted).to.have.length(1);
+      expect(posted[0].init?.headers).to.deep.include({
+        Authorization: 'Bearer tok-upload',
+      });
+      const events = JSON.parse(String(posted[0].init?.body)).events;
+      expect(
+        events.map((event: { event_type: string }) => event.event_type),
+      ).to.include.members(['Profile Setup Started', 'Profile Setup Failed']);
+      expect(events[0].event_properties).to.include({ server_region: 'sfo' });
+      const failed = events.find(
+        (event: { event_type: string }) =>
+          event.event_type === 'Profile Setup Failed',
+      );
+      expect(failed.event_properties).to.include({
+        step: 'capture',
+        reason_code: reason,
+      });
     });
-    const events = JSON.parse(String(posted[0].init?.body)).events;
-    expect(
-      events.map((event: { event_type: string }) => event.event_type),
-    ).to.include.members(['Profile Setup Started', 'Profile Setup Failed']);
-    expect(events[0].event_properties).to.include({ server_region: 'sfo' });
-    const failed = events.find(
-      (event: { event_type: string }) =>
-        event.event_type === 'Profile Setup Failed',
-    );
-    expect(failed.event_properties).to.include({
-      step: 'capture',
-      reason_code: 'capture_failed',
-    });
-  });
+  }
 });

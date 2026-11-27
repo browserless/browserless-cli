@@ -160,10 +160,6 @@ describe('cli-utils/capture-runner.addCaptureFlags', () => {
     expect(opts.termsTtlDays).to.equal('14');
   });
 
-  /**
-   * `refresh` reads the source from the profile, so commander must not reject
-   * the run — and `upload` / `inspect` must keep rejecting it.
-   */
   describe('sourceOptional', () => {
     const parseBare = (opts: Parameters<typeof addCaptureFlags>[1]) => {
       let captured: Record<string, unknown> | null = null;
@@ -183,8 +179,11 @@ describe('cli-utils/capture-runner.addCaptureFlags', () => {
       expect(opts?.profile).to.be.undefined;
     });
 
-    it('default: commander rejects a run with no --browser', () => {
-      expect(() => parseBare(undefined)).to.throw(/--browser/);
+    it('default: source flags may be omitted for the picker', () => {
+      const opts = parseBare(undefined);
+      expect(opts).not.to.be.null;
+      expect(opts?.browser).to.be.undefined;
+      expect(opts?.profile).to.be.undefined;
     });
 
     // Commander re-wraps option descriptions, so compare on collapsed whitespace.
@@ -201,6 +200,9 @@ describe('cli-utils/capture-runner.addCaptureFlags', () => {
 
     it('default: the help text carries no such promise', () => {
       expect(helpText()).to.not.contain('stored settings');
+      expect(helpText()).to.contain(
+        'Optional in a terminal: leave it out to choose from the browsers found on this machine',
+      );
     });
   });
 });
@@ -896,7 +898,8 @@ describe('cli-utils/capture-runner.runCapture diagnostics', () => {
           `
           import { mock } from 'node:test';
           mock.module(${JSON.stringify(new URL('../browsers/discover.js', import.meta.url).href)}, {
-            namedExports: { resolveProfile: async () => ({
+            namedExports: { loadSourceCandidates: async () => [], resolveProfile: async () => ({
+              browserKey: 'chrome', profileDirName: 'Default',
               browserDisplayName: 'Chrome\\nforged-browser',
               profileDisplayName: 'Default\\nforged-profile',
               binaryPath: 'C:\\\\Chrome\\\\chrome.exe'
@@ -931,8 +934,15 @@ describe('cli-utils/capture-runner.runCapture diagnostics', () => {
             autoFit: true, keepDomains: ['keep.example']
           };
           const flags = mergeStoredSettings({}, stored);
-          const result = await runCapture({ flags, requiresDisclaimer: false });
-          console.log(JSON.stringify({ flags, diagnostics: result.diagnostics }));
+          const result = await runCapture({ flags, requiresDisclaimer: false, missingSource: 'stored-settings' });
+          const picked = await runCapture({ flags: {}, requiresDisclaimer: false, missingSource: 'flags',
+            sourceSeams: { isInteractive: true, prompt: async () => '2', write: () => {},
+              loadCandidates: async () => [
+                { browserKey: 'picker-a', profileDirName: 'Profile 1', browserDisplayName: 'Picker A', profileDisplayName: 'Work', binaryPath: '/fake/browser-a' },
+                { browserKey: 'picker-b', profileDirName: 'Default', browserDisplayName: 'Picker B', profileDisplayName: 'Personal', binaryPath: '/fake/browser-b' },
+              ]
+            } });
+          console.log(JSON.stringify({ flags, diagnostics: result.diagnostics, source: picked.source }));
         `,
         ],
         { env: { ...process.env, HOME: home.path, USERPROFILE: home.path } },
@@ -963,7 +973,9 @@ describe('cli-utils/capture-runner.runCapture diagnostics', () => {
       expect(stderr).not.to.include('\nforged');
       // eslint-disable-next-line no-control-regex
       expect(stderr).not.to.match(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/);
-      const { flags, diagnostics } = JSON.parse(stdout);
+      const { flags, diagnostics, source } = JSON.parse(stdout);
+      expect(source).to.deep.equal({ browser: 'picker-b', profile: 'Default' });
+      expect(stderr).to.include('> Capturing Picker B / Personal\n');
       expect(flags.onlyDomain).to.deep.equal([
         'keep.example',
         'drop.example',
@@ -979,18 +991,88 @@ describe('cli-utils/capture-runner.runCapture diagnostics', () => {
   });
 });
 
-/**
- * The guard is reachable only from `profile refresh` — every other verb binds the
- * source flags as `requiredOption`, so commander rejects the run first. It fires for
- * two triggers needing opposite fixes: a profile the CLI never captured (so it has
- * no stored settings to replay) and a server too old to return the settings at all.
- */
 describe('cli-utils/capture-runner.runCapture missing-source guard', () => {
+  const candidate = {
+    browserKey: 'picker-a',
+    browserDisplayName: 'Picker A',
+    profileDirName: 'Default',
+    profileDisplayName: 'Work',
+    binaryPath: '/fake/browser',
+    userDataDir: '/fake/data',
+    profilePath: '/fake/data/Default',
+  };
+
+  for (const [flags, interactive, code, message] of [
+    [{}, true, 'no-local-profiles', 'No browser profiles were found'],
+    [
+      {},
+      false,
+      'missing-required-flag',
+      '--browser and --profile are required',
+    ],
+    [
+      { browser: 'picker-a' },
+      false,
+      'missing-required-flag',
+      '--profile is required',
+    ],
+  ] as const) {
+    it(`reports ${code}: ${message}`, async () => {
+      const err = await runCapture({
+        flags,
+        requiresDisclaimer: false,
+        missingSource: 'flags',
+        sourceSeams: {
+          isInteractive: interactive,
+          loadCandidates: async () => (interactive ? [] : [candidate]),
+        },
+      }).catch((error: unknown) => error);
+      expect(err).to.be.instanceOf(UsageError).with.property('code', code);
+      expect((err as Error).message).to.include(message);
+      if (!interactive)
+        expect((err as Error).message).to.include(
+          '--browser picker-a --profile "Default"',
+        );
+    });
+  }
+
+  it('rejects a declined picker before asking for the disclaimer', async () => {
+    const home = await setupTempHome();
+    try {
+      const err = await runCapture({
+        flags: {},
+        requiresDisclaimer: true,
+        missingSource: 'flags',
+        sourceSeams: {
+          isInteractive: true,
+          loadCandidates: async () => [
+            candidate,
+            { ...candidate, browserKey: 'picker-b' },
+          ],
+          prompt: async () => {
+            throw new Error('closed');
+          },
+          write: () => {},
+        },
+      }).catch((error: unknown) => error);
+      expect(err)
+        .to.be.instanceOf(UsageError)
+        .with.property('code', 'invalid-source-choice');
+    } finally {
+      await home.cleanup();
+    }
+  });
+
   const rejects = async (
     flags: CaptureFlags,
   ): Promise<{ err: unknown; message: string }> => {
     try {
-      await runCapture({ flags, requiresDisclaimer: false });
+      await runCapture({
+        flags,
+        requiresDisclaimer: false,
+        missingSource: 'stored-settings',
+        sourceSeams: { isInteractive: false },
+      });
       throw new Error('expected runCapture to reject');
     } catch (err) {
       return { err, message: (err as Error).message };

@@ -26,6 +26,8 @@ export type UsageCode =
   | 'local-profile-ambiguous'
   | 'invalid-only-domain'
   | 'missing-capture-settings'
+  | 'no-local-profiles'
+  | 'invalid-source-choice'
   | 'invalid-integer-flag'
   | 'invalid-server-url'
   | 'unsupported-server-scheme'

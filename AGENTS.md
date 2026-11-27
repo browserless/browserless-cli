@@ -39,8 +39,8 @@ src/
 ├── cli-utils/                      # Cross-command helpers used by commands/
 │   ├── client.ts                   # buildClient, addClientFlags, printJson,
 │   │                               #   parseNonNegativeInt, collectRepeated
-│   └── capture-runner.ts           # Shared capture flag wiring + runCapture()
-│                                   #   for upload/refresh/inspect
+│   ├── capture-runner.ts           # Shared runCapture() for upload/refresh/inspect
+│   └── source-picker.ts            # Numbered local browser profile prompt
 │
 ├── capture/                        # Layer 1 — local extraction pipeline
 │   ├── index.ts                    # Public: captureFromProfile() — copy → launch → cdp
@@ -216,7 +216,7 @@ Design rules (most enforced by specs — the `cli.ts` hook wiring is covered ind
 
 ```text
 profile upload --browser chrome --profile Default --name my-profile
-  → resolveProfile()             [browsers/discover.ts]
+  → resolveProfile() / pickSourceProfile() [browsers/discover.ts, cli-utils/source-picker.ts] — asks in a terminal when --browser/--profile are omitted
   → ensureTermsAccepted()        [auth/disclaimer.ts]
   → buildTempUserDataDir()       [capture/copy-profile.ts] — filtered copy, strip Singletons; Windows cookie-DB lock gate first
   → launchBrowserWithPipe()      [capture/launch.ts]      — spawn user's binary, CDP on fd 3/4
@@ -362,9 +362,9 @@ Noun-first command tree. Reserved top-level nouns for future work: `session`, `b
 | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | `profile list [--limit N] [--offset N]`                                               | List cloud profiles for the current token                                 |
 | `profile show <name>`                                                                 | Show one profile's metadata                                               |
-| `profile upload --browser <k> --profile <p> --name <n>`                               | Capture + POST /profile/upload (strict create)                            |
+| `profile upload --name <n> [--browser <k>] [--profile <p>]`                           | Capture + POST /profile/upload; source flags optional in a terminal       |
 | `profile refresh --name <n>` (capture flags optional — read from the stored settings) | GET /profile/:name, then capture + POST /profile/refresh (strict replace) |
-| `profile inspect --browser <k> --profile <p>`                                         | Capture + print summary, no upload (debugging)                            |
+| `profile inspect [--browser <k>] [--profile <p>]`                                     | Capture + print summary, no upload; source flags optional in a terminal   |
 | `profile launch --browser <k> --profile <p> [--headless]`                             | Spawn user's real browser interactively against real dir                  |
 | `profile rename <old> <new>`                                                          | → PUT /profile/:name                                                      |
 | `profile delete <name>`                                                               | → DELETE /profile/:name                                                   |
