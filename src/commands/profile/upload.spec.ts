@@ -69,7 +69,7 @@ describe('commands/profile/upload telemetry', () => {
         {
           json: true,
           sourceArgs: ['--browser', 'Google Chrome', '--profile', 'Work'],
-          expectedSource: { browser: 'Google Chrome', profile: 'Work' },
+          expectedSource: { browser: 'picker-b', profile: 'Profile 2' },
         },
         {
           json: true,

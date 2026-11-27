@@ -26,6 +26,17 @@ interface Options extends CaptureFlags {
   json?: boolean;
 }
 
+const hasResolvedSource = (version: string | undefined): boolean => {
+  // Versions through 0.7.0 could have stored display names instead of keys.
+  const match =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(
+      version ?? '',
+    );
+  if (!match) return false;
+  const [, major, minor, patch] = match;
+  return +major > 0 || +minor > 7 || (+minor === 7 && +patch > 0);
+};
+
 const action = (opts: Options): Promise<void> =>
   withProfileSetup(opts.attemptId, 'refresh', async (setup) => {
     // Profile first: the settings must be in hand before the browser runs, and a 404
@@ -43,6 +54,12 @@ const action = (opts: Options): Promise<void> =>
       flags,
       requiresDisclaimer: true,
       missingSource: 'stored-settings',
+      exactSource: hasResolvedSource(existing.captureSettings?.cliVersion)
+        ? {
+            browser: opts.browser === undefined,
+            profile: opts.profile === undefined,
+          }
+        : undefined,
     });
     setup.ready();
 
@@ -56,9 +73,7 @@ const action = (opts: Options): Promise<void> =>
       state: result.state,
       serialized: result.serialized,
       captureSettings: buildCaptureSettings(
-        flags.browser !== undefined && flags.profile !== undefined
-          ? flags
-          : { ...flags, ...result.source },
+        { ...flags, ...result.source },
         result.diagnostics,
         'refresh',
       ),

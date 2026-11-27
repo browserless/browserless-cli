@@ -47,9 +47,7 @@ const action = (opts: Options, deps: UploadDeps): Promise<void> =>
       state: result.state,
       serialized: result.serialized,
       captureSettings: buildCaptureSettings(
-        opts.browser !== undefined && opts.profile !== undefined
-          ? opts
-          : { ...opts, ...result.source },
+        { ...opts, ...result.source },
         result.diagnostics,
         'upload',
       ),

@@ -207,6 +207,41 @@ describe('CLI terminal-safe display', () => {
     expect(result.stderr).not.to.include('\\u000a');
   });
 
+  it('refuses to refresh a deleted saved directory that matches another profile by name', async () => {
+    const userDataDir = path.join(home.path, 'browser-data');
+    await fs.mkdir(path.join(userDataDir, 'Profile 1'), { recursive: true });
+    await fs.writeFile(
+      path.join(userDataDir, 'Profile 1', 'Preferences'),
+      '{}',
+    );
+    await fs.writeFile(
+      path.join(userDataDir, 'Local State'),
+      JSON.stringify({
+        profile: { info_cache: { 'Profile 1': { name: 'Default' } } },
+      }),
+    );
+    await home.writeRawConfig(
+      'custom-browsers.json',
+      JSON.stringify([
+        { name: 'test-browser', binaryPath: process.execPath, userDataDir },
+      ]),
+    );
+    stub.setResponse(
+      200,
+      JSON.stringify({
+        captureSettings: {
+          browser: 'test-browser',
+          profile: 'Default',
+          cliVersion: '0.8.0',
+        },
+      }),
+    );
+    const result = await run(['refresh', '--name', 'work']);
+    expect(result.code).to.equal(2);
+    expect(result.stderr).to.include('Saved profile directory "Default"');
+    expect(stub.recorded.map(({ method }) => method)).to.deep.equal(['GET']);
+  });
+
   for (const args of [
     ['show', 'work'],
     ['list'],

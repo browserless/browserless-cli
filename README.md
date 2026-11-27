@@ -177,7 +177,9 @@ browserless profile delete my-chrome-v2
 
 ### `--browser` and `--profile`
 
-In a terminal, `profile upload` and `profile inspect` can omit either flag. The CLI lists matching local profiles and asks you to pick a number, or uses the only match and prints which one it chose. In scripts and CI, supply both flags; if either is missing, the error lists the exact flags for the matching profiles. Upload saves the chosen source so `profile refresh` can reuse it without asking. If refresh has no saved source, it can ask in a terminal too.
+In a terminal, `profile upload` and `profile inspect` can omit either flag. The CLI lists matching local profiles and asks you to pick a number, or uses the only match and prints which one it chose. The picker needs a terminal on both stdin and stderr. In scripts and CI, supply both flags; if either is missing, the error lists the flags for the matching profiles. If refresh has no saved source, it can ask in a terminal too.
+
+Upload and refresh save the browser key and profile directory actually captured, even when you typed a display name. For settings saved by versions newer than 0.7.0, refresh fails if the saved directory is gone rather than matching another profile's display name. Pass explicit `--browser` and `--profile` flags to choose a replacement.
 
 `--browser` accepts either the short key or the display name in quotes:
 

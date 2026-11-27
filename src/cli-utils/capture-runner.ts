@@ -617,27 +617,35 @@ const resolveCaptureSource = async (
   { browser, profile }: CaptureFlags,
   missingSource: 'stored-settings' | 'flags',
   seams?: CaptureSourceSeams,
+  exactSource?: Parameters<typeof loadSourceCandidates>[2],
 ): Promise<DetectedProfile> => {
   if (browser !== undefined && profile !== undefined)
-    return resolveProfile(browser, profile);
+    return resolveProfile(browser, profile, exactSource);
   const interactive =
-    seams?.isInteractive ?? captureIsInteractive(process.stdin.isTTY, isCi());
+    seams?.isInteractive ??
+    (captureIsInteractive(process.stdin.isTTY, isCi()) &&
+      process.stderr.isTTY === true);
   const missing =
     browser === undefined
       ? profile === undefined
         ? '--browser and --profile are'
         : '--browser is'
       : '--profile is';
-  if (!interactive && missingSource === 'stored-settings') {
-    throw new UsageError(
-      `${missing} required: this profile has no stored capture settings to read them from (it was not created by the CLI, or this server does not return them yet)`,
-      'missing-capture-settings',
-    );
-  }
   const candidates = await (seams?.loadCandidates ?? loadSourceCandidates)(
     browser,
     profile,
-  );
+    exactSource,
+  ).catch((error: unknown) => {
+    // Keep the scripted refresh error when discovery has no matching suggestions.
+    if (
+      !interactive &&
+      missingSource === 'stored-settings' &&
+      !exactSource &&
+      error instanceof UsageError
+    )
+      return [];
+    throw error;
+  });
   if (interactive) {
     const [first, ...rest] = candidates;
     if (!first)
@@ -663,8 +671,12 @@ const resolveCaptureSource = async (
       ].join('\n')
     : ' No browser profiles were found on this machine; register one with `browserless profile sources add`.';
   throw new UsageError(
-    `${missing} required when the CLI cannot ask (stdin is not a terminal, or CI is set).${guidance}`,
-    'missing-required-flag',
+    missingSource === 'stored-settings'
+      ? `${missing} required: this profile has no stored capture settings to read them from (it was not created by the CLI, or this server does not return them yet).${guidance}`
+      : `${missing} required when the CLI cannot ask (stdin or stderr is not a terminal, or CI is set).${guidance}`,
+    missingSource === 'stored-settings'
+      ? 'missing-capture-settings'
+      : 'missing-required-flag',
   );
 };
 
@@ -673,16 +685,19 @@ export const runCapture = async ({
   requiresDisclaimer,
   missingSource,
   sourceSeams,
+  exactSource,
 }: {
   flags: CaptureFlags;
   requiresDisclaimer: boolean;
   missingSource: 'stored-settings' | 'flags';
   sourceSeams?: CaptureSourceSeams;
+  exactSource?: Parameters<typeof loadSourceCandidates>[2];
 }): Promise<CaptureRunResult> => {
   const detected = await resolveCaptureSource(
     flags,
     missingSource,
     sourceSeams,
+    exactSource,
   );
 
   if (requiresDisclaimer) {

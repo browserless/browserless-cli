@@ -145,6 +145,8 @@ export interface ProfileAuthState {
 
 On `profile refresh` the capture flags are optional: the CLI fetches the profile first, merges the stored settings under any flags you pass (explicit flag wins, lists replace wholesale), and prints what it will run.
 
+Upload and refresh persist the captured browser key and profile directory. When the stored CLI version is newer than 0.7.0, inherited source values match only keys and directories, so a deleted directory fails refresh even if its name matches another profile's display name.
+
 Two constraints ride on `ProfileCaptureSettings`:
 
 - **`excludeDomains` is the merged list**, built by `buildCaptureSettings(flags, result.diagnostics, verb)` — pass the diagnostics object, never `flags.excludeDomain`; the `Pick<CaptureDiagnostics, 'excludedDomains'>` parameter makes a bare array a compile error. On a refresh the CLI reads that stored list back itself (`mergeStoredSettings`) and suppresses the local config for the run, so the capture filters identically on a machine whose `excluded_domains` differs. Passing an explicit `--exclude-domain` **without** `--no-default-excludes` opts back out of that suppression, so the refreshing machine's own config is unioned in; the CLI says so on stderr. Passing both flags together suppresses the config and excludes only the listed patterns, which the CLI also states explicitly — the two facts are tracked separately because the post-merge `defaultExcludes` cannot distinguish them.

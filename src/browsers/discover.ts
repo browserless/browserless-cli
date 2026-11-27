@@ -278,14 +278,16 @@ export const findSourceCandidates = (
   profileInput: string | undefined,
   registeredBrowserKeys: { key: string; displayName: string }[],
   detected: DetectedProfile[],
+  exact?: { browser: boolean; profile: boolean },
 ): DetectedProfile[] => {
   let sameBrowser = detected;
   if (browserInput !== undefined) {
     const lowered = browserInput.trim().toLowerCase();
-    const known = registeredBrowserKeys.some(
-      (b) =>
-        b.key.toLowerCase() === lowered ||
-        b.displayName.toLowerCase() === lowered,
+    const known = registeredBrowserKeys.some((b) =>
+      exact?.browser
+        ? b.key === browserInput
+        : b.key.toLowerCase() === lowered ||
+          b.displayName.toLowerCase() === lowered,
     );
     if (!known) {
       throw new UsageError(
@@ -293,8 +295,15 @@ export const findSourceCandidates = (
         'unknown-browser',
       );
     }
-    sameBrowser = detected.filter((p) => matchesBrowser(browserInput, p));
-    if (sameBrowser.length === 0) {
+    sameBrowser = detected.filter((p) =>
+      exact?.browser
+        ? p.browserKey === browserInput
+        : matchesBrowser(browserInput, p),
+    );
+    if (
+      sameBrowser.length === 0 &&
+      !(exact?.profile && profileInput !== undefined)
+    ) {
       throw new UsageError(
         `Browser "${terminalSafe(browserInput)}" is registered but has no detected profiles on this machine.`,
         'browser-has-no-profiles',
@@ -303,8 +312,18 @@ export const findSourceCandidates = (
   }
 
   if (profileInput === undefined) return sameBrowser;
-  const matches = sameBrowser.filter((p) => matchesProfile(profileInput, p));
+  const matches = sameBrowser.filter((p) =>
+    exact?.profile
+      ? p.profileDirName === profileInput
+      : matchesProfile(profileInput, p),
+  );
   if (matches.length === 0) {
+    if (exact?.profile) {
+      throw new UsageError(
+        `Saved profile directory "${terminalSafe(profileInput)}" was not found. Use \`browserless profile inspect\` to pick a source, then rerun with explicit --browser and --profile.`,
+        'local-profile-not-found',
+      );
+    }
     const candidates = sameBrowser
       .map(
         (p) =>
@@ -327,12 +346,14 @@ export const resolveProfileFromCandidates = (
   profileInput: string,
   registeredBrowserKeys: { key: string; displayName: string }[],
   detected: DetectedProfile[],
+  exact?: Parameters<typeof findSourceCandidates>[4],
 ): DetectedProfile => {
   const matches = findSourceCandidates(
     browserInput,
     profileInput,
     registeredBrowserKeys,
     detected,
+    exact,
   );
   if (matches.length === 1) return matches[0];
 
@@ -362,12 +383,14 @@ const registeredBrowserKeys = async () => {
 export const loadSourceCandidates = async (
   browserInput?: string,
   profileInput?: string,
+  exact?: Parameters<typeof findSourceCandidates>[4],
 ): Promise<DetectedProfile[]> =>
   findSourceCandidates(
     browserInput,
     profileInput,
     await registeredBrowserKeys(),
     await discoverProfiles(),
+    exact,
   );
 
 /**
@@ -377,10 +400,12 @@ export const loadSourceCandidates = async (
 export const resolveProfile = async (
   browserInput: string,
   profileInput: string,
+  exact?: Parameters<typeof findSourceCandidates>[4],
 ): Promise<DetectedProfile> =>
   resolveProfileFromCandidates(
     browserInput,
     profileInput,
     await registeredBrowserKeys(),
     await discoverProfiles(),
+    exact,
   );
