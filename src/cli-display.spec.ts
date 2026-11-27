@@ -270,4 +270,55 @@ describe('CLI terminal-safe display', () => {
       expect(JSON.parse(structured.stdout)).to.deep.equal(body);
     });
   }
+
+  it('reports an invalid scripted refresh browser instead of missing settings', async () => {
+    stub.setResponse(200, JSON.stringify({ captureSettings: {} }));
+    const result = await run([
+      'refresh',
+      '--name',
+      'work',
+      '--browser',
+      'not-a-browser',
+    ]);
+    expect(result.code).to.equal(2);
+    expect(result.stderr).to.include('Unknown browser "not-a-browser"');
+    expect(stub.recorded.map(({ method }) => method)).to.deep.equal(['GET']);
+  });
+
+  it('lists the replacement browser profiles without reusing a saved directory', async () => {
+    const userDataDir = path.join(home.path, 'replacement-data');
+    await fs.mkdir(path.join(userDataDir, 'Profile 1'), { recursive: true });
+    await fs.writeFile(
+      path.join(userDataDir, 'Profile 1', 'Preferences'),
+      '{}',
+    );
+    await home.writeRawConfig(
+      'custom-browsers.json',
+      JSON.stringify([
+        { name: 'replacement', binaryPath: process.execPath, userDataDir },
+      ]),
+    );
+    stub.setResponse(
+      200,
+      JSON.stringify({
+        captureSettings: {
+          browser: 'chrome',
+          profile: 'Profile 1',
+          cliVersion: '0.8.0',
+        },
+      }),
+    );
+    const result = await run([
+      'refresh',
+      '--name',
+      'work',
+      '--browser',
+      'replacement',
+    ]);
+    expect(result.code).to.equal(2);
+    expect(result.stderr).to.include(
+      '--browser replacement --profile "Profile 1"',
+    );
+    expect(stub.recorded.map(({ method }) => method)).to.deep.equal(['GET']);
+  });
 });

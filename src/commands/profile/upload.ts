@@ -47,9 +47,10 @@ const action = (opts: Options, deps: UploadDeps): Promise<void> =>
       state: result.state,
       serialized: result.serialized,
       captureSettings: buildCaptureSettings(
-        { ...opts, ...result.source },
+        opts,
         result.diagnostics,
         'upload',
+        result.source,
       ),
     });
 

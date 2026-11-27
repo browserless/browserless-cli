@@ -379,6 +379,17 @@ export const SETTINGS_REPLAY_SOURCE: Record<
   passwordStore: 'passwordStore',
 };
 
+// Versions through 0.7.0 could have stored display names instead of keys.
+export const hasResolvedSource = (version: string | undefined): boolean => {
+  const match =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(
+      version ?? '',
+    );
+  if (!match) return false;
+  const [, major, minor, patch] = match;
+  return +major > 0 || +minor > 7 || (+minor === 7 && +patch > 0);
+};
+
 /**
  * Pass `result.diagnostics`, never `flags.excludeDomain`: `excludedDomains` is
  * the EFFECTIVE merged list, and taking the object rather than a bare array
@@ -388,10 +399,18 @@ export const buildCaptureSettings = (
   flags: CaptureFlags,
   diagnostics: Pick<CaptureDiagnostics, 'excludedDomains'>,
   verb: CaptureVerb,
+  source?: CaptureRunResult['source'],
 ): ProfileCaptureSettings | undefined => {
+  const selectors =
+    source &&
+    (hasResolvedSource(version) ||
+      flags.browser === undefined ||
+      flags.profile === undefined)
+      ? source
+      : flags;
   const settings: ProfileCaptureSettings = {
-    ...withKey('browser', safeScalar('browser', flags.browser)),
-    ...withKey('profile', safeScalar('profile', flags.profile)),
+    ...withKey('browser', safeScalar('browser', selectors.browser)),
+    ...withKey('profile', safeScalar('profile', selectors.profile)),
     // Record `[]` only when the user opted out. An empty list from an empty config is
     // "unknown", not an instruction — storing it would make a later flagless refresh
     // suppress exclusions the user configured after this upload.
@@ -635,17 +654,7 @@ const resolveCaptureSource = async (
     browser,
     profile,
     exactSource,
-  ).catch((error: unknown) => {
-    // Keep the scripted refresh error when discovery has no matching suggestions.
-    if (
-      !interactive &&
-      missingSource === 'stored-settings' &&
-      !exactSource &&
-      error instanceof UsageError
-    )
-      return [];
-    throw error;
-  });
+  );
   if (interactive) {
     const [first, ...rest] = candidates;
     if (!first)

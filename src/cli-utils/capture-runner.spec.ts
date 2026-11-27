@@ -1071,7 +1071,10 @@ describe('cli-utils/capture-runner.runCapture missing-source guard', () => {
         flags,
         requiresDisclaimer: false,
         missingSource: 'stored-settings',
-        sourceSeams: { isInteractive: false },
+        sourceSeams: {
+          isInteractive: false,
+          loadCandidates: async () => [candidate],
+        },
       });
       throw new Error('expected runCapture to reject');
     } catch (err) {

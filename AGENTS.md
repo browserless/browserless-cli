@@ -145,7 +145,7 @@ export interface ProfileAuthState {
 
 On `profile refresh` the capture flags are optional: the CLI fetches the profile first, merges the stored settings under any flags you pass (explicit flag wins, lists replace wholesale), and prints what it will run.
 
-Upload and refresh persist the captured browser key and profile directory. When the stored CLI version is newer than 0.7.0, inherited source values match only keys and directories, so a deleted directory fails refresh even if its name matches another profile's display name.
+Versions newer than 0.7.0 persist the captured browser key and profile directory. Refresh matches inherited source values only by key and directory, and never inherits that directory across browsers. Source builds still stamped 0.7.0 retain legacy storage and replay semantics, including flexible matching of picker output.
 
 Two constraints ride on `ProfileCaptureSettings`:
 

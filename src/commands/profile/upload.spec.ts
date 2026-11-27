@@ -8,6 +8,7 @@ import * as telemetry from '../../telemetry/index.js';
 import { _resetRecordedTokenForTests } from '../../telemetry/token-cache.js';
 import { registerUpload } from './upload.js';
 import { startStubServer } from '../../test-helpers/stub-server.js';
+import { version } from '../../version.js';
 
 describe('commands/profile/upload telemetry', () => {
   let home: TempHome;
@@ -69,7 +70,10 @@ describe('commands/profile/upload telemetry', () => {
         {
           json: true,
           sourceArgs: ['--browser', 'Google Chrome', '--profile', 'Work'],
-          expectedSource: { browser: 'picker-b', profile: 'Profile 2' },
+          expectedSource:
+            version === '0.7.0'
+              ? { browser: 'Google Chrome', profile: 'Work' }
+              : { browser: 'picker-b', profile: 'Profile 2' },
         },
         {
           json: true,

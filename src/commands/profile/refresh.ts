@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+import { loadSourceCandidates } from '../../browsers/discover.js';
 import {
   addClientFlags,
   buildClient,
@@ -8,6 +9,7 @@ import {
   addCaptureFlags,
   buildCaptureSettings,
   CaptureFlags,
+  hasResolvedSource,
   mergeStoredSettings,
   printEffectiveSettings,
   runCapture,
@@ -26,17 +28,6 @@ interface Options extends CaptureFlags {
   json?: boolean;
 }
 
-const hasResolvedSource = (version: string | undefined): boolean => {
-  // Versions through 0.7.0 could have stored display names instead of keys.
-  const match =
-    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(
-      version ?? '',
-    );
-  if (!match) return false;
-  const [, major, minor, patch] = match;
-  return +major > 0 || +minor > 7 || (+minor === 7 && +patch > 0);
-};
-
 const action = (opts: Options): Promise<void> =>
   withProfileSetup(opts.attemptId, 'refresh', async (setup) => {
     // Profile first: the settings must be in hand before the browser runs, and a 404
@@ -48,13 +39,24 @@ const action = (opts: Options): Promise<void> =>
     // indistinguishable and the printout cannot tell whether the config was suppressed.
     const userOptedOut = opts.defaultExcludes === false;
     const flags = mergeStoredSettings(opts, existing.captureSettings);
+    const stored = existing.captureSettings;
+    const resolved = hasResolvedSource(stored?.cliVersion);
+    const changedBrowser =
+      resolved &&
+      opts.browser !== undefined &&
+      opts.profile === undefined &&
+      stored?.profile !== undefined &&
+      (await loadSourceCandidates(opts.browser)).some(
+        (p) => p.browserKey !== stored.browser,
+      );
+    if (changedBrowser) delete flags.profile;
     printEffectiveSettings(flags, existing.captureSettings, { userOptedOut });
 
     const result = await runCapture({
       flags,
       requiresDisclaimer: true,
-      missingSource: 'stored-settings',
-      exactSource: hasResolvedSource(existing.captureSettings?.cliVersion)
+      missingSource: changedBrowser ? 'flags' : 'stored-settings',
+      exactSource: resolved
         ? {
             browser: opts.browser === undefined,
             profile: opts.profile === undefined,
@@ -73,9 +75,10 @@ const action = (opts: Options): Promise<void> =>
       state: result.state,
       serialized: result.serialized,
       captureSettings: buildCaptureSettings(
-        { ...flags, ...result.source },
+        flags,
         result.diagnostics,
         'refresh',
+        result.source,
       ),
     });
 
