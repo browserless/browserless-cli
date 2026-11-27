@@ -392,17 +392,26 @@ describe('cli-utils/capture-runner.buildCaptureSettings', () => {
   });
 
   it('preserves filters without storing a partial source for an unsavable browser key', () => {
-    for (const browser of ['Work!', 'Work ']) {
-      const settings = buildCaptureSettings(
-        { onlyDomain: ['example.com'] },
-        { excludedDomains: [] },
-        'upload',
-        { browser, profile: 'Default' },
-      );
-      expect(settings).to.deep.equal({
-        onlyDomains: ['example.com'],
-        cliVersion: version,
-      });
+    const stderr = Sinon.stub(process.stderr, 'write').returns(true);
+    try {
+      for (const browser of ['Work!', 'Work ']) {
+        stderr.resetHistory();
+        const settings = buildCaptureSettings(
+          { onlyDomain: ['example.com'], passwordStore: 'basic' },
+          { excludedDomains: [] },
+          'upload',
+          { browser, profile: 'Default' },
+        );
+        expect(settings).to.deep.equal({
+          onlyDomains: ['example.com'],
+          cliVersion: version,
+        });
+        expect(stderr.args.flat().join('')).to.match(
+          /pass --password-store again on refresh/i,
+        );
+      }
+    } finally {
+      stderr.restore();
     }
   });
 

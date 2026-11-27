@@ -181,6 +181,8 @@ In a terminal, `profile upload` and `profile inspect` can omit either flag. The 
 
 Versions newer than 0.7.0 save the browser key and profile directory actually captured, even when you typed a display name. Refresh fails if that saved directory is gone rather than matching another profile's display name. If you override the browser, choose a profile from the new browser or pass `--profile` explicitly. Source builds still stamped 0.7.0 preserve typed selectors and replay picked directories using the legacy matcher, which can also match display names.
 
+Custom browser keys with leading or trailing whitespace can be picked in a terminal, but cannot be saved for refresh or matched by `--browser`. To use one in a script, register it under a name without surrounding whitespace. When the CLI cannot save a source, it also cannot save its `--password-store` override; pass the override again on refresh if needed.
+
 `--browser` accepts either the short key or the display name in quotes:
 
 | Key             | Display name                                      |

@@ -420,6 +420,11 @@ export const buildCaptureSettings = (
     process.stderr.write(
       '  → Not saving the source: the browser key cannot be replayed. Choose the source again on refresh.\n',
     );
+    if (flags.passwordStore !== undefined) {
+      process.stderr.write(
+        '  → Not saving the --password-store override. Pass --password-store again on refresh to use the same store.\n',
+      );
+    }
   }
   const settings: ProfileCaptureSettings = {
     ...withKey(
