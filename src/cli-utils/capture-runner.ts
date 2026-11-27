@@ -408,9 +408,28 @@ export const buildCaptureSettings = (
       flags.profile === undefined)
       ? source
       : flags;
+  const key = source?.browser;
+  const unsavableSource =
+    selectors === source &&
+    key !== undefined &&
+    (!key ||
+      key.trim() !== key ||
+      key.length > MAX_SETTINGS_FIELD_LENGTH ||
+      SETTINGS_UNSAFE_SCALAR.test(key));
+  if (unsavableSource) {
+    process.stderr.write(
+      '  → Not saving the source: the browser key cannot be replayed. Choose the source again on refresh.\n',
+    );
+  }
   const settings: ProfileCaptureSettings = {
-    ...withKey('browser', safeScalar('browser', selectors.browser)),
-    ...withKey('profile', safeScalar('profile', selectors.profile)),
+    ...withKey(
+      'browser',
+      unsavableSource ? undefined : safeScalar('browser', selectors.browser),
+    ),
+    ...withKey(
+      'profile',
+      unsavableSource ? undefined : safeScalar('profile', selectors.profile),
+    ),
     // Record `[]` only when the user opted out. An empty list from an empty config is
     // "unknown", not an instruction — storing it would make a later flagless refresh
     // suppress exclusions the user configured after this upload.
@@ -427,7 +446,9 @@ export const buildCaptureSettings = (
     ...(flags.autoFit ? { autoFit: true } : {}),
     ...withKey(
       'passwordStore',
-      safeScalar('password-store', flags.passwordStore),
+      unsavableSource
+        ? undefined
+        : safeScalar('password-store', flags.passwordStore),
     ),
     cliVersion: version,
   };
@@ -708,24 +729,6 @@ export const runCapture = async ({
     sourceSeams,
     exactSource,
   );
-
-  // A resolved key must survive the server's capture-settings normalization.
-  const key = detected.browserKey;
-  if (
-    requiresDisclaimer &&
-    (hasResolvedSource(version) ||
-      flags.browser === undefined ||
-      flags.profile === undefined) &&
-    (key.length === 0 ||
-      key.trim() !== key ||
-      key.length > MAX_SETTINGS_FIELD_LENGTH ||
-      SETTINGS_UNSAFE_SCALAR.test(key))
-  ) {
-    throw new UsageError(
-      `Browser key "${terminalSafe(key)}" cannot be saved for refresh. Re-register the browser with a shell-safe name of at most ${MAX_SETTINGS_FIELD_LENGTH} characters and no surrounding whitespace.`,
-      'unknown-browser',
-    );
-  }
 
   if (requiresDisclaimer) {
     await ensureTermsAccepted({

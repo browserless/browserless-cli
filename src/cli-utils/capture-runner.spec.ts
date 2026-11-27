@@ -391,6 +391,21 @@ describe('cli-utils/capture-runner.buildCaptureSettings', () => {
     expect(build({}, { excludedDomains: [] })).to.not.have.property('autoFit');
   });
 
+  it('preserves filters without storing a partial source for an unsavable browser key', () => {
+    for (const browser of ['Work!', 'Work ']) {
+      const settings = buildCaptureSettings(
+        { onlyDomain: ['example.com'] },
+        { excludedDomains: [] },
+        'upload',
+        { browser, profile: 'Default' },
+      );
+      expect(settings).to.deep.equal({
+        onlyDomains: ['example.com'],
+        cliVersion: version,
+      });
+    }
+  });
+
   /**
    * The server accepts only bare hostname patterns, but `normalizeExclusion`
    * deliberately accepts URL and non-ASCII spellings as *input*. Storing them raw
