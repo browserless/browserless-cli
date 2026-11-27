@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,59 @@ describe('CLI terminal-safe display', () => {
   afterEach(async () => {
     await stub.close();
     await home.cleanup();
+  });
+
+  it('lists safe explicit source flags when inspect cannot prompt', async () => {
+    const userDataDir = path.join(home.path, 'browser-data');
+    await fs.mkdir(path.join(userDataDir, 'Default'), { recursive: true });
+    await fs.writeFile(path.join(userDataDir, 'Default', 'Preferences'), '{}');
+    await fs.writeFile(
+      path.join(userDataDir, 'Local State'),
+      JSON.stringify({
+        profile: { info_cache: { Default: { name: 'Evil\x1b[31mName' } } },
+      }),
+    );
+    await home.writeRawConfig(
+      'custom-browsers.json',
+      JSON.stringify([
+        { name: 'hostile-browser', binaryPath: process.execPath, userDataDir },
+        { name: 'Browser Team', binaryPath: process.execPath, userDataDir },
+        { name: 'browser; invalid', binaryPath: process.execPath, userDataDir },
+      ]),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        fileURLToPath(new URL('./cli.js', import.meta.url)),
+        'profile',
+        'inspect',
+      ],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 3000,
+        env: {
+          ...process.env,
+          HOME: home.path,
+          USERPROFILE: home.path,
+          BROWSERLESS_TELEMETRY_DISABLED: '1',
+        },
+      },
+    );
+    expect(result.status, result.stderr).to.equal(2);
+    expect(result.stderr).to.include(
+      '--browser and --profile are required when the CLI cannot ask',
+    );
+    expect(result.stderr).to.include(
+      '--browser hostile-browser --profile "Default"',
+    );
+    expect(result.stderr).to.include(
+      '--browser "Browser Team" --profile "Default"',
+    );
+    expect(result.stderr).not.to.include('--browser browser;');
+    expect(result.stderr).to.include('Evil\\u001b[31mName');
+    expect(result.stderr).not.to.include('\x1b');
+    expect(result.stderr).not.to.include(userDataDir);
   });
 
   const run = (args: string[]) =>
@@ -154,6 +207,41 @@ describe('CLI terminal-safe display', () => {
     expect(result.stderr).not.to.include('\\u000a');
   });
 
+  it('refuses to refresh a deleted saved directory that matches another profile by name', async () => {
+    const userDataDir = path.join(home.path, 'browser-data');
+    await fs.mkdir(path.join(userDataDir, 'Profile 1'), { recursive: true });
+    await fs.writeFile(
+      path.join(userDataDir, 'Profile 1', 'Preferences'),
+      '{}',
+    );
+    await fs.writeFile(
+      path.join(userDataDir, 'Local State'),
+      JSON.stringify({
+        profile: { info_cache: { 'Profile 1': { name: 'Default' } } },
+      }),
+    );
+    await home.writeRawConfig(
+      'custom-browsers.json',
+      JSON.stringify([
+        { name: 'test-browser', binaryPath: process.execPath, userDataDir },
+      ]),
+    );
+    stub.setResponse(
+      200,
+      JSON.stringify({
+        captureSettings: {
+          browser: 'test-browser',
+          profile: 'Default',
+          cliVersion: '0.8.0',
+        },
+      }),
+    );
+    const result = await run(['refresh', '--name', 'work']);
+    expect(result.code).to.equal(2);
+    expect(result.stderr).to.include('Saved profile directory "Default"');
+    expect(stub.recorded.map(({ method }) => method)).to.deep.equal(['GET']);
+  });
+
   for (const args of [
     ['show', 'work'],
     ['list'],
@@ -182,4 +270,55 @@ describe('CLI terminal-safe display', () => {
       expect(JSON.parse(structured.stdout)).to.deep.equal(body);
     });
   }
+
+  it('reports an invalid scripted refresh browser instead of missing settings', async () => {
+    stub.setResponse(200, JSON.stringify({ captureSettings: {} }));
+    const result = await run([
+      'refresh',
+      '--name',
+      'work',
+      '--browser',
+      'not-a-browser',
+    ]);
+    expect(result.code).to.equal(2);
+    expect(result.stderr).to.include('Unknown browser "not-a-browser"');
+    expect(stub.recorded.map(({ method }) => method)).to.deep.equal(['GET']);
+  });
+
+  it('lists the replacement browser profiles without reusing a saved directory', async () => {
+    const userDataDir = path.join(home.path, 'replacement-data');
+    await fs.mkdir(path.join(userDataDir, 'Profile 1'), { recursive: true });
+    await fs.writeFile(
+      path.join(userDataDir, 'Profile 1', 'Preferences'),
+      '{}',
+    );
+    await home.writeRawConfig(
+      'custom-browsers.json',
+      JSON.stringify([
+        { name: 'replacement', binaryPath: process.execPath, userDataDir },
+      ]),
+    );
+    stub.setResponse(
+      200,
+      JSON.stringify({
+        captureSettings: {
+          browser: 'chrome',
+          profile: 'Profile 1',
+          cliVersion: '0.8.0',
+        },
+      }),
+    );
+    const result = await run([
+      'refresh',
+      '--name',
+      'work',
+      '--browser',
+      'replacement',
+    ]);
+    expect(result.code).to.equal(2);
+    expect(result.stderr).to.include(
+      '--browser replacement --profile "Profile 1"',
+    );
+    expect(stub.recorded.map(({ method }) => method)).to.deep.equal(['GET']);
+  });
 });

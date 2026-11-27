@@ -39,8 +39,8 @@ src/
 ├── cli-utils/                      # Cross-command helpers used by commands/
 │   ├── client.ts                   # buildClient, addClientFlags, printJson,
 │   │                               #   parseNonNegativeInt, collectRepeated
-│   └── capture-runner.ts           # Shared capture flag wiring + runCapture()
-│                                   #   for upload/refresh/inspect
+│   ├── capture-runner.ts           # Shared runCapture() for upload/refresh/inspect
+│   └── source-picker.ts            # Numbered local browser profile prompt
 │
 ├── capture/                        # Layer 1 — local extraction pipeline
 │   ├── index.ts                    # Public: captureFromProfile() — copy → launch → cdp
@@ -145,6 +145,8 @@ export interface ProfileAuthState {
 
 On `profile refresh` the capture flags are optional: the CLI fetches the profile first, merges the stored settings under any flags you pass (explicit flag wins, lists replace wholesale), and prints what it will run.
 
+Versions newer than 0.7.0 persist the captured browser key and profile directory. Refresh matches inherited source values only by key and directory, and never inherits that directory across browsers. Source builds still stamped 0.7.0 retain legacy storage and replay semantics, including flexible matching of picker output.
+
 Two constraints ride on `ProfileCaptureSettings`:
 
 - **`excludeDomains` is the merged list**, built by `buildCaptureSettings(flags, result.diagnostics, verb)` — pass the diagnostics object, never `flags.excludeDomain`; the `Pick<CaptureDiagnostics, 'excludedDomains'>` parameter makes a bare array a compile error. On a refresh the CLI reads that stored list back itself (`mergeStoredSettings`) and suppresses the local config for the run, so the capture filters identically on a machine whose `excluded_domains` differs. Passing an explicit `--exclude-domain` **without** `--no-default-excludes` opts back out of that suppression, so the refreshing machine's own config is unioned in; the CLI says so on stderr. Passing both flags together suppresses the config and excludes only the listed patterns, which the CLI also states explicitly — the two facts are tracked separately because the post-merge `defaultExcludes` cannot distinguish them.
@@ -216,7 +218,7 @@ Design rules (most enforced by specs — the `cli.ts` hook wiring is covered ind
 
 ```text
 profile upload --browser chrome --profile Default --name my-profile
-  → resolveProfile()             [browsers/discover.ts]
+  → resolveProfile() / pickSourceProfile() [browsers/discover.ts, cli-utils/source-picker.ts] — asks in a terminal when --browser/--profile are omitted
   → ensureTermsAccepted()        [auth/disclaimer.ts]
   → buildTempUserDataDir()       [capture/copy-profile.ts] — filtered copy, strip Singletons; Windows cookie-DB lock gate first
   → launchBrowserWithPipe()      [capture/launch.ts]      — spawn user's binary, CDP on fd 3/4
@@ -362,9 +364,9 @@ Noun-first command tree. Reserved top-level nouns for future work: `session`, `b
 | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | `profile list [--limit N] [--offset N]`                                               | List cloud profiles for the current token                                 |
 | `profile show <name>`                                                                 | Show one profile's metadata                                               |
-| `profile upload --browser <k> --profile <p> --name <n>`                               | Capture + POST /profile/upload (strict create)                            |
+| `profile upload --name <n> [--browser <k>] [--profile <p>]`                           | Capture + POST /profile/upload; source flags optional in a terminal       |
 | `profile refresh --name <n>` (capture flags optional — read from the stored settings) | GET /profile/:name, then capture + POST /profile/refresh (strict replace) |
-| `profile inspect --browser <k> --profile <p>`                                         | Capture + print summary, no upload (debugging)                            |
+| `profile inspect [--browser <k>] [--profile <p>]`                                     | Capture + print summary, no upload; source flags optional in a terminal   |
 | `profile launch --browser <k> --profile <p> [--headless]`                             | Spawn user's real browser interactively against real dir                  |
 | `profile rename <old> <new>`                                                          | → PUT /profile/:name                                                      |
 | `profile delete <name>`                                                               | → DELETE /profile/:name                                                   |

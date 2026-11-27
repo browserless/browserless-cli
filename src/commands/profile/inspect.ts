@@ -1,13 +1,21 @@
 import { Command } from 'commander';
 import { printJson } from '../../cli-utils/client.js';
-import { addCaptureFlags, CaptureFlags, runCapture } from '../../cli-utils/capture-runner.js';
+import {
+  addCaptureFlags,
+  CaptureFlags,
+  runCapture,
+} from '../../cli-utils/capture-runner.js';
 
 interface Options extends CaptureFlags {
   json?: boolean;
 }
 
 const action = async (opts: Options): Promise<void> => {
-  const result = await runCapture({ flags: opts, requiresDisclaimer: false });
+  const result = await runCapture({
+    flags: opts,
+    requiresDisclaimer: false,
+    missingSource: 'flags',
+  });
   if (opts.json) {
     printJson(result.state);
     return;

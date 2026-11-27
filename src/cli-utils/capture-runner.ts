@@ -1,4 +1,9 @@
-import { resolveProfile, type DetectedProfile } from '../browsers/discover.js';
+import {
+  loadSourceCandidates,
+  resolveProfile,
+  type DetectedProfile,
+} from '../browsers/discover.js';
+import { pickSourceProfile, type SourcePickerSeams } from './source-picker.js';
 import {
   CaptureOptions,
   CaptureResult,
@@ -140,26 +145,19 @@ export interface CaptureFlags {
 
 export const addCaptureFlags = (
   cmd: Command,
-  /**
-   * `profile refresh` reads the source from the profile's stored settings, so it
-   * alone can leave these off. `upload` has nothing stored yet and `inspect` never
-   * contacts a server, so for them these stay required.
-   */
   opts: { sourceOptional?: boolean } = {},
 ): Command => {
-  const source = opts.sourceOptional
-    ? cmd.option.bind(cmd)
-    : cmd.requiredOption.bind(cmd);
-  const suffix = opts.sourceOptional
-    ? ". Optional here — read from the profile's stored settings when omitted"
-    : '';
-  source(
+  const suffix = (kind: string) =>
+    opts.sourceOptional
+      ? ". Optional here — read from the profile's stored settings when omitted (asks in a terminal when nothing is stored)"
+      : `. Optional in a terminal: leave it out to choose from the ${kind} found on this machine`;
+  cmd.option(
     '--browser <key>',
-    `Source browser key (chrome / brave / edge / ...) or display name${suffix}`,
+    `Source browser key (chrome / brave / edge / ...) or display name${suffix('browsers')}`,
   );
-  source(
+  cmd.option(
     '--profile <name>',
-    `Source profile display name or directory (e.g. "Personal", "Default")${suffix}`,
+    `Source profile display name or directory (e.g. "Personal", "Default")${suffix('profiles')}`,
   );
   return cmd
     .option(
@@ -381,6 +379,17 @@ export const SETTINGS_REPLAY_SOURCE: Record<
   passwordStore: 'passwordStore',
 };
 
+// Versions through 0.7.0 could have stored display names instead of keys.
+export const hasResolvedSource = (version: string | undefined): boolean => {
+  const match =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(
+      version ?? '',
+    );
+  if (!match) return false;
+  const [, major, minor, patch] = match;
+  return +major > 0 || +minor > 7 || (+minor === 7 && +patch > 0);
+};
+
 /**
  * Pass `result.diagnostics`, never `flags.excludeDomain`: `excludedDomains` is
  * the EFFECTIVE merged list, and taking the object rather than a bare array
@@ -390,10 +399,42 @@ export const buildCaptureSettings = (
   flags: CaptureFlags,
   diagnostics: Pick<CaptureDiagnostics, 'excludedDomains'>,
   verb: CaptureVerb,
+  source?: CaptureRunResult['source'],
 ): ProfileCaptureSettings | undefined => {
+  const selectors =
+    source &&
+    (hasResolvedSource(version) ||
+      flags.browser === undefined ||
+      flags.profile === undefined)
+      ? source
+      : flags;
+  const key = source?.browser;
+  const unsavableSource =
+    selectors === source &&
+    key !== undefined &&
+    (!key ||
+      key.trim() !== key ||
+      key.length > MAX_SETTINGS_FIELD_LENGTH ||
+      SETTINGS_UNSAFE_SCALAR.test(key));
+  if (unsavableSource) {
+    process.stderr.write(
+      '  → Not saving the source: the browser key cannot be replayed. Choose the source again on refresh.\n',
+    );
+    if (flags.passwordStore !== undefined) {
+      process.stderr.write(
+        '  → Not saving the --password-store override. Pass --password-store again on refresh to use the same store.\n',
+      );
+    }
+  }
   const settings: ProfileCaptureSettings = {
-    ...withKey('browser', safeScalar('browser', flags.browser)),
-    ...withKey('profile', safeScalar('profile', flags.profile)),
+    ...withKey(
+      'browser',
+      unsavableSource ? undefined : safeScalar('browser', selectors.browser),
+    ),
+    ...withKey(
+      'profile',
+      unsavableSource ? undefined : safeScalar('profile', selectors.profile),
+    ),
     // Record `[]` only when the user opted out. An empty list from an empty config is
     // "unknown", not an instruction — storing it would make a later flagless refresh
     // suppress exclusions the user configured after this upload.
@@ -410,7 +451,9 @@ export const buildCaptureSettings = (
     ...(flags.autoFit ? { autoFit: true } : {}),
     ...withKey(
       'passwordStore',
-      safeScalar('password-store', flags.passwordStore),
+      unsavableSource
+        ? undefined
+        : safeScalar('password-store', flags.passwordStore),
     ),
     cliVersion: version,
   };
@@ -606,34 +649,91 @@ export const printEffectiveSettings = (
   }
 };
 
-/**
- * Run the capture pipeline shared by `profile upload` / `profile refresh` /
- * `profile inspect`. Resolves the profile, prompts for terms when due,
- * applies the merged exclusion list, runs the capture, and surfaces
- * diagnostics on stderr (so `--json` callers can pipe stdout cleanly).
- */
-export const runCapture = async (params: {
-  flags: CaptureFlags;
-  /** Whether the disclaimer should be enforced (false for `inspect`). */
-  requiresDisclaimer: boolean;
-}): Promise<CaptureResult> => {
-  const { flags, requiresDisclaimer } = params;
+export interface CaptureSourceSeams extends SourcePickerSeams {
+  isInteractive?: boolean;
+  loadCandidates?: typeof loadSourceCandidates;
+}
 
-  // Only reachable from `profile refresh`: every other verb binds these as
-  // `requiredOption`, so commander rejects the run before the action fires. Naming
-  // the cause matters because the two triggers need opposite fixes — a profile the
-  // CLI never captured, versus a server too old to return the settings at all.
-  if (!flags.browser || !flags.profile) {
-    const missing = [
-      !flags.browser ? '--browser' : null,
-      !flags.profile ? '--profile' : null,
-    ].filter(Boolean);
-    throw new UsageError(
-      `${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} required: this profile has no stored capture settings to read them from (it was not created by the CLI, or this server does not return them yet)`,
-      'missing-capture-settings',
-    );
+export type CaptureRunResult = CaptureResult & {
+  source: { browser: string; profile: string };
+};
+
+const resolveCaptureSource = async (
+  { browser, profile }: CaptureFlags,
+  missingSource: 'stored-settings' | 'flags',
+  seams?: CaptureSourceSeams,
+  exactSource?: Parameters<typeof loadSourceCandidates>[2],
+): Promise<DetectedProfile> => {
+  if (browser !== undefined && profile !== undefined)
+    return resolveProfile(browser, profile, exactSource);
+  const interactive =
+    seams?.isInteractive ??
+    (captureIsInteractive(process.stdin.isTTY, isCi()) &&
+      process.stderr.isTTY === true);
+  const missing =
+    browser === undefined
+      ? profile === undefined
+        ? '--browser and --profile are'
+        : '--browser is'
+      : '--profile is';
+  const candidates = await (seams?.loadCandidates ?? loadSourceCandidates)(
+    browser,
+    profile,
+    exactSource,
+  );
+  if (interactive) {
+    const [first, ...rest] = candidates;
+    if (!first)
+      throw new UsageError(
+        'No browser profiles were found on this machine. Register a custom browser with `browserless profile sources add`, then run this again.',
+        'no-local-profiles',
+      );
+    return pickSourceProfile([first, ...rest], seams);
   }
-  const detected = await resolveProfile(flags.browser, flags.profile);
+  const guidance = candidates.length
+    ? [
+        '\nBrowser profiles found on this machine:',
+        ...candidates.map((p) => {
+          const key = terminalSafe(p.browserKey);
+          const dir = JSON.stringify(terminalSafe(p.profileDirName));
+          const label = `${terminalSafe(p.browserDisplayName)} / ${terminalSafe(p.profileDisplayName)}`;
+          // Custom keys are arbitrary text; don't turn shell syntax into suggested commands.
+          if (!/^[\p{L}\p{N}_.][\p{L}\p{N}_ .-]*$/u.test(key)) {
+            return `  ${label} (${dir}): pass the browser key ${JSON.stringify(key)} with quoting for your shell`;
+          }
+          return `  --browser ${key.includes(' ') ? JSON.stringify(key) : key} --profile ${dir}   (${label})`;
+        }),
+      ].join('\n')
+    : ' No browser profiles were found on this machine; register one with `browserless profile sources add`.';
+  throw new UsageError(
+    missingSource === 'stored-settings'
+      ? `${missing} required: this profile has no stored capture settings to read them from (it was not created by the CLI, or this server does not return them yet).${guidance}`
+      : `${missing} required when the CLI cannot ask (stdin or stderr is not a terminal, or CI is set).${guidance}`,
+    missingSource === 'stored-settings'
+      ? 'missing-capture-settings'
+      : 'missing-required-flag',
+  );
+};
+
+export const runCapture = async ({
+  flags,
+  requiresDisclaimer,
+  missingSource,
+  sourceSeams,
+  exactSource,
+}: {
+  flags: CaptureFlags;
+  requiresDisclaimer: boolean;
+  missingSource: 'stored-settings' | 'flags';
+  sourceSeams?: CaptureSourceSeams;
+  exactSource?: Parameters<typeof loadSourceCandidates>[2];
+}): Promise<CaptureRunResult> => {
+  const detected = await resolveCaptureSource(
+    flags,
+    missingSource,
+    sourceSeams,
+    exactSource,
+  );
 
   if (requiresDisclaimer) {
     await ensureTermsAccepted({
@@ -816,5 +916,8 @@ export const runCapture = async (params: {
     }
   }
 
-  return result;
+  return {
+    ...result,
+    source: { browser: detected.browserKey, profile: detected.profileDirName },
+  };
 };

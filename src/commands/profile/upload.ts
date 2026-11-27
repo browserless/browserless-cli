@@ -35,6 +35,7 @@ const action = (opts: Options, deps: UploadDeps): Promise<void> =>
     const result = await deps.runCapture({
       flags: opts,
       requiresDisclaimer: true,
+      missingSource: 'flags',
     });
     setup.ready();
 
@@ -45,7 +46,12 @@ const action = (opts: Options, deps: UploadDeps): Promise<void> =>
       name: opts.name!,
       state: result.state,
       serialized: result.serialized,
-      captureSettings: buildCaptureSettings(opts, result.diagnostics, 'upload'),
+      captureSettings: buildCaptureSettings(
+        opts,
+        result.diagnostics,
+        'upload',
+        result.source,
+      ),
     });
 
     if (opts.json) {

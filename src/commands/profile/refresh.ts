@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+import { loadSourceCandidates } from '../../browsers/discover.js';
 import {
   addClientFlags,
   buildClient,
@@ -8,6 +9,7 @@ import {
   addCaptureFlags,
   buildCaptureSettings,
   CaptureFlags,
+  hasResolvedSource,
   mergeStoredSettings,
   printEffectiveSettings,
   runCapture,
@@ -37,9 +39,34 @@ const action = (opts: Options): Promise<void> =>
     // indistinguishable and the printout cannot tell whether the config was suppressed.
     const userOptedOut = opts.defaultExcludes === false;
     const flags = mergeStoredSettings(opts, existing.captureSettings);
+    const stored = existing.captureSettings;
+    const resolved = hasResolvedSource(stored?.cliVersion);
+    const changedBrowser =
+      resolved &&
+      opts.browser !== undefined &&
+      ((opts.profile === undefined && stored?.profile !== undefined) ||
+        (opts.passwordStore === undefined &&
+          stored?.passwordStore !== undefined)) &&
+      (await loadSourceCandidates(opts.browser, opts.profile)).some(
+        (p) => p.browserKey !== stored?.browser,
+      );
+    if (changedBrowser) {
+      if (opts.profile === undefined) delete flags.profile;
+      if (opts.passwordStore === undefined) delete flags.passwordStore;
+    }
     printEffectiveSettings(flags, existing.captureSettings, { userOptedOut });
 
-    const result = await runCapture({ flags, requiresDisclaimer: true });
+    const result = await runCapture({
+      flags,
+      requiresDisclaimer: true,
+      missingSource: changedBrowser ? 'flags' : 'stored-settings',
+      exactSource: resolved
+        ? {
+            browser: opts.browser === undefined,
+            profile: opts.profile === undefined,
+          }
+        : undefined,
+    });
     setup.ready();
 
     process.stderr.write(
@@ -55,6 +82,7 @@ const action = (opts: Options): Promise<void> =>
         flags,
         result.diagnostics,
         'refresh',
+        result.source,
       ),
     });
 
