@@ -50,7 +50,10 @@ const action = (opts: Options, deps: UploadDeps): Promise<void> =>
         {
           ...opts,
           browser: opts.browser ?? result.source.browser,
-          profile: opts.profile ?? result.source.profile,
+          profile:
+            opts.browser === undefined
+              ? result.source.profile
+              : (opts.profile ?? result.source.profile),
         },
         result.diagnostics,
         'upload',

@@ -59,7 +59,10 @@ const action = (opts: Options): Promise<void> =>
         {
           ...flags,
           browser: flags.browser ?? result.source.browser,
-          profile: flags.profile ?? result.source.profile,
+          profile:
+            flags.browser === undefined
+              ? result.source.profile
+              : (flags.profile ?? result.source.profile),
         },
         result.diagnostics,
         'refresh',

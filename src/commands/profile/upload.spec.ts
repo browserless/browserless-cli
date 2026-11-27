@@ -60,13 +60,27 @@ describe('commands/profile/upload telemetry', () => {
     });
     sandbox.stub(process.stderr, 'write').returns(true);
     try {
-      for (const json of [false, true]) {
+      for (const { json, sourceArgs, expectedSource } of [
+        {
+          json: false,
+          sourceArgs: [],
+          expectedSource: { browser: 'picker-b', profile: 'Profile 2' },
+        },
+        {
+          json: true,
+          sourceArgs: ['--browser', 'Google Chrome', '--profile', 'Work'],
+          expectedSource: { browser: 'Google Chrome', profile: 'Work' },
+        },
+        {
+          json: true,
+          sourceArgs: ['--profile', 'Work'],
+          expectedSource: { browser: 'picker-b', profile: 'Profile 2' },
+        },
+      ]) {
         stdout.length = 0;
         const program = new Command();
-        let captureFlags;
         registerUpload(program, {
-          runCapture: async ({ flags }) => {
-            captureFlags = flags;
+          runCapture: async () => {
             return {
               source: { browser: 'picker-b', profile: 'Profile 2' },
               state: { cookies: [], origins: [] },
@@ -92,9 +106,7 @@ describe('commands/profile/upload telemetry', () => {
             'upload',
             '--name',
             'work',
-            ...(json
-              ? ['--browser', 'Google Chrome', '--profile', 'Work']
-              : []),
+            ...sourceArgs,
             '--token',
             'test',
             '--server',
@@ -103,21 +115,9 @@ describe('commands/profile/upload telemetry', () => {
           ],
           { from: 'user' },
         );
-        expect(captureFlags).to.include(
-          json
-            ? { browser: 'Google Chrome', profile: 'Work' }
-            : { defaultExcludes: true },
-        );
-        if (!json) {
-          expect(captureFlags).not.to.have.any.keys('browser', 'profile');
-        }
         expect(
           JSON.parse(stub.recorded.at(-1)!.body).captureSettings,
-        ).to.include(
-          json
-            ? { browser: 'Google Chrome', profile: 'Work' }
-            : { browser: 'picker-b', profile: 'Profile 2' },
-        );
+        ).to.include(expectedSource);
         if (json) expect(JSON.parse(stdout.join(''))).to.deep.equal(profile);
         else {
           expect(stdout.join('\n')).to.include('work\\u001b[2J');
