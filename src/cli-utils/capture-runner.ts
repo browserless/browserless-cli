@@ -709,6 +709,24 @@ export const runCapture = async ({
     exactSource,
   );
 
+  // A resolved key must survive the server's capture-settings normalization.
+  const key = detected.browserKey;
+  if (
+    requiresDisclaimer &&
+    (hasResolvedSource(version) ||
+      flags.browser === undefined ||
+      flags.profile === undefined) &&
+    (key.length === 0 ||
+      key.trim() !== key ||
+      key.length > MAX_SETTINGS_FIELD_LENGTH ||
+      SETTINGS_UNSAFE_SCALAR.test(key))
+  ) {
+    throw new UsageError(
+      `Browser key "${terminalSafe(key)}" cannot be saved for refresh. Re-register the browser with a shell-safe name of at most ${MAX_SETTINGS_FIELD_LENGTH} characters and no surrounding whitespace.`,
+      'unknown-browser',
+    );
+  }
+
   if (requiresDisclaimer) {
     await ensureTermsAccepted({
       acceptViaFlag: !!flags.acceptTerms,

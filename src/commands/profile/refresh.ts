@@ -44,12 +44,16 @@ const action = (opts: Options): Promise<void> =>
     const changedBrowser =
       resolved &&
       opts.browser !== undefined &&
-      opts.profile === undefined &&
-      stored?.profile !== undefined &&
-      (await loadSourceCandidates(opts.browser)).some(
-        (p) => p.browserKey !== stored.browser,
+      ((opts.profile === undefined && stored?.profile !== undefined) ||
+        (opts.passwordStore === undefined &&
+          stored?.passwordStore !== undefined)) &&
+      (await loadSourceCandidates(opts.browser, opts.profile)).some(
+        (p) => p.browserKey !== stored?.browser,
       );
-    if (changedBrowser) delete flags.profile;
+    if (changedBrowser) {
+      if (opts.profile === undefined) delete flags.profile;
+      if (opts.passwordStore === undefined) delete flags.passwordStore;
+    }
     printEffectiveSettings(flags, existing.captureSettings, { userOptedOut });
 
     const result = await runCapture({
